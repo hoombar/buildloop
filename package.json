@@ -1,0 +1,37 @@
+{
+  "name": "inline-feedback-widget",
+  "version": "1.0.0",
+  "description": "A lightweight JavaScript widget for collecting contextual user feedback with Obsidian export",
+  "main": "dist/feedback-widget.js",
+  "files": [
+    "dist/",
+    "src/",
+    "example/",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "cat src/storage.js src/context.js src/element-selector.js src/export.js src/ui.js src/widget.js > dist/feedback-widget.js && sed 's/\\/\\/.*$//g; /^[[:space:]]*$/d; s/^[[:space:]]*//g' dist/feedback-widget.js > dist/feedback-widget.min.js",
+    "demo": "open example/demo.html"
+  },
+  "keywords": [
+    "feedback",
+    "widget",
+    "javascript",
+    "obsidian",
+    "ui",
+    "ux",
+    "user-feedback"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/inline-feedback-widget.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/inline-feedback-widget/issues"
+  },
+  "homepage": "https://github.com/yourusername/inline-feedback-widget#readme",
+  "browser": "dist/feedback-widget.js",
+  "cdn": "dist/feedback-widget.min.js"
+}
