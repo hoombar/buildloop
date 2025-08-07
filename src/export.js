@@ -129,12 +129,10 @@ const FeedbackExport = {
     // Add element info if available
     if (context.selectedElement) {
       const element = context.selectedElement;
-      contextText += `  - Element: ${this.escapeMarkdown(element.selector)}`;
       
       if (element.text && element.text.trim()) {
-        contextText += ` "${this.escapeMarkdown(element.text)}"`;
+        contextText += `  - Element Content: "${this.escapeMarkdown(element.text)}"\n`;
       }
-      contextText += '\n';
       
       // Add sibling context if available
       if (element.siblingContext) {
@@ -162,6 +160,11 @@ const FeedbackExport = {
         // Add parent context if no siblings
         if (!siblingContext.prevSibling && !siblingContext.nextSibling && !siblingContext.label && siblingContext.parentContext) {
           contextParts.push(`In: "${this.escapeMarkdown(siblingContext.parentContext)}"`);
+        }
+        
+        // Add DOM path for element location
+        if (siblingContext.domPath) {
+          contextParts.push(`DOM Path: ${this.escapeMarkdown(siblingContext.domPath)}`);
         }
         
         if (contextParts.length > 0) {

@@ -138,6 +138,11 @@ const ElementSelector = {
           contextParts.push(`<span style="color: #6c757d; font-style: italic;">In: ${this.escapeHtml(context.parentContext)}</span>`);
         }
         
+        // Add DOM path for element location
+        if (context.domPath) {
+          contextParts.push(`<span style="color: #28a745; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(context.domPath)}</span>`);
+        }
+        
         if (contextParts.length > 0) {
           contextHtml = `
             <div style="margin-bottom: 6px; padding: 4px; background: #f8f9fa; border-radius: 3px; font-size: 11px; line-height: 1.4;">
@@ -152,7 +157,6 @@ const ElementSelector = {
       
       statusContent.innerHTML = `
         ${contextHtml}
-        <div style="margin-bottom: 2px;"><strong>Selector:</strong> ${this.escapeHtml(elementInfo.selector)}</div>
         <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
       `;
     }
@@ -279,6 +283,11 @@ const ElementSelector = {
           contextParts.push(`<span style="color: #6c757d; font-style: italic;">In: ${this.escapeHtml(context.parentContext)}</span>`);
         }
         
+        // Add DOM path for element location
+        if (context.domPath) {
+          contextParts.push(`<span style="color: #155724; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(context.domPath)}</span>`);
+        }
+        
         if (contextParts.length > 0) {
           contextHtml = `
             <div style="margin-bottom: 6px; padding: 4px; background: #d4edda; border-radius: 3px; font-size: 11px; line-height: 1.4;">
@@ -294,7 +303,6 @@ const ElementSelector = {
       statusContent.innerHTML = `
         <div style="color: #28a745; font-weight: 600; margin-bottom: 4px;">✅ Element Selected!</div>
         ${contextHtml}
-        <div style="margin-bottom: 2px;"><strong>Selector:</strong> ${this.escapeHtml(elementInfo.selector)}</div>
         <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
       `;
     }
@@ -390,6 +398,11 @@ const ElementSelector = {
         contextParts.push(`In: "${this.escapeHtml(context.parentContext)}"`);
       }
       
+      // Add DOM path for element location
+      if (context.domPath) {
+        contextParts.push(`DOM Path: ${this.escapeHtml(context.domPath)}`);
+      }
+      
       if (contextParts.length > 0) {
         const contextDiv = document.createElement('div');
         contextDiv.style.cssText = `
@@ -405,24 +418,13 @@ const ElementSelector = {
       }
     }
     
-    const selectorSpan = document.createElement('div');
-    selectorSpan.style.cssText = `
-      font-family: monospace;
-      color: #495057;
-      margin-bottom: 4px;
-      word-break: break-all;
-      font-weight: 600;
-    `;
-    selectorSpan.innerHTML = '<strong>Selector:</strong> ' + this.escapeHtml(elementInfo.selector);
-    
     const textSpan = document.createElement('div');
     textSpan.style.cssText = `
-      color: #6c757d;
-      font-style: italic;
+      color: #495057;
+      font-weight: 600;
     `;
     textSpan.innerHTML = '<strong>Content:</strong> ' + (elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)');
     
-    preview.appendChild(selectorSpan);
     preview.appendChild(textSpan);
     
     return preview;

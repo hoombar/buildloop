@@ -266,7 +266,7 @@ const FeedbackUI = {
           
           <div class="feedback-widget-actions">
             <button type="button" class="feedback-widget-cancel-btn">Cancel</button>
-            <button type="submit" class="feedback-widget-submit-btn">Submit Feedback</button>
+            <button type="submit" class="feedback-widget-submit-btn">Queue Feedback</button>
           </div>
         </form>
       </div>
@@ -366,7 +366,7 @@ const FeedbackUI = {
       }
       
       FeedbackStorage.addFeedbackItem(feedbackItem);
-      this.showSuccess('Feedback submitted successfully!');
+      this.showSuccess('Feedback queued successfully! Don\'t forget to export your feedback when ready.');
       this.updateFeedbackCounter();
       
       setTimeout(() => {
@@ -542,14 +542,7 @@ const FeedbackUI = {
       const markdown = FeedbackExport.generateMarkdown(items);
       FeedbackExport.downloadMarkdown(markdown);
       
-      // Ask if user wants to clear data after export
-      setTimeout(() => {
-        if (confirm('Export complete. Clear all feedback to start a new session?')) {
-          FeedbackStorage.clearAllFeedback();
-          this.updateFeedbackCounter();
-          this.refreshAdminPanel();
-        }
-      }, 1000);
+      // Export complete - no immediate clear prompt
       
     } catch (error) {
       this.showError('Export failed: ' + error.message);

@@ -80,7 +80,8 @@ const FeedbackContext = {
       prevSibling: null,
       nextSibling: null,
       label: null,
-      parentContext: null
+      parentContext: null,
+      domPath: null
     };
     
     // Check for associated label
@@ -125,6 +126,9 @@ const FeedbackContext = {
       }
     }
     
+    // Add DOM path for better element identification
+    context.domPath = this.getDOMPath(element);
+    
     return context;
   },
 
@@ -165,6 +169,63 @@ const FeedbackContext = {
     }
     
     return null;
+  },
+
+  getDOMPath(element) {
+    if (!element) return null;
+    
+    const pathParts = [];
+    let current = element;
+    let depth = 0;
+    const maxDepth = 5; // Limit depth to keep path readable
+    
+    while (current && current.nodeType === Node.ELEMENT_NODE && depth < maxDepth) {
+      let part = current.tagName.toLowerCase();
+      
+      // Add meaningful identifiers
+      if (current.id) {
+        part += `#${current.id}`;
+      } else if (current.className && typeof current.className === 'string') {
+        const classes = current.className.trim().split(/\s+/).filter(cls => cls).slice(0, 2);
+        if (classes.length > 0) {
+          part += `.${classes.join('.')}`;
+        }
+      }
+      
+      // Add text hint for meaningful elements
+      const text = this.getElementText(current, 3);
+      if (text && text.length > 0 && text.length < 20) {
+        part += `("${text}")`;
+      }
+      
+      pathParts.unshift(part);
+      current = current.parentElement;
+      depth++;
+      
+      // Stop at meaningful container elements
+      if (current === document.body || 
+          (current && (current.tagName === 'MAIN' || 
+                      current.tagName === 'SECTION' || 
+                      current.tagName === 'ARTICLE' ||
+                      current.tagName === 'NAV' ||
+                      current.className && current.className.includes('container')))) {
+        if (current !== document.body) {
+          let containerPart = current.tagName.toLowerCase();
+          if (current.id) {
+            containerPart += `#${current.id}`;
+          } else if (current.className && typeof current.className === 'string') {
+            const classes = current.className.trim().split(/\s+/).filter(cls => cls).slice(0, 1);
+            if (classes.length > 0) {
+              containerPart += `.${classes[0]}`;
+            }
+          }
+          pathParts.unshift(containerPart);
+        }
+        break;
+      }
+    }
+    
+    return pathParts.join(' > ');
   },
 
   generateCSSSelector(element) {

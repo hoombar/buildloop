@@ -242,7 +242,8 @@ if (typeof module !== 'undefined' && module.exports) {
       prevSibling: null,
       nextSibling: null,
       label: null,
-      parentContext: null
+      parentContext: null,
+      domPath: null
     };
     
     // Check for associated label
@@ -287,6 +288,9 @@ if (typeof module !== 'undefined' && module.exports) {
       }
     }
     
+    // Add DOM path for better element identification
+    context.domPath = this.getDOMPath(element);
+    
     return context;
   },
 
@@ -327,6 +331,63 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     
     return null;
+  },
+
+  getDOMPath(element) {
+    if (!element) return null;
+    
+    const pathParts = [];
+    let current = element;
+    let depth = 0;
+    const maxDepth = 5; // Limit depth to keep path readable
+    
+    while (current && current.nodeType === Node.ELEMENT_NODE && depth < maxDepth) {
+      let part = current.tagName.toLowerCase();
+      
+      // Add meaningful identifiers
+      if (current.id) {
+        part += `#${current.id}`;
+      } else if (current.className && typeof current.className === 'string') {
+        const classes = current.className.trim().split(/\s+/).filter(cls => cls).slice(0, 2);
+        if (classes.length > 0) {
+          part += `.${classes.join('.')}`;
+        }
+      }
+      
+      // Add text hint for meaningful elements
+      const text = this.getElementText(current, 3);
+      if (text && text.length > 0 && text.length < 20) {
+        part += `("${text}")`;
+      }
+      
+      pathParts.unshift(part);
+      current = current.parentElement;
+      depth++;
+      
+      // Stop at meaningful container elements
+      if (current === document.body || 
+          (current && (current.tagName === 'MAIN' || 
+                      current.tagName === 'SECTION' || 
+                      current.tagName === 'ARTICLE' ||
+                      current.tagName === 'NAV' ||
+                      current.className && current.className.includes('container')))) {
+        if (current !== document.body) {
+          let containerPart = current.tagName.toLowerCase();
+          if (current.id) {
+            containerPart += `#${current.id}`;
+          } else if (current.className && typeof current.className === 'string') {
+            const classes = current.className.trim().split(/\s+/).filter(cls => cls).slice(0, 1);
+            if (classes.length > 0) {
+              containerPart += `.${classes[0]}`;
+            }
+          }
+          pathParts.unshift(containerPart);
+        }
+        break;
+      }
+    }
+    
+    return pathParts.join(' > ');
   },
 
   generateCSSSelector(element) {
@@ -633,6 +694,11 @@ if (typeof module !== 'undefined' && module.exports) {
           contextParts.push(`<span style="color: #6c757d; font-style: italic;">In: ${this.escapeHtml(context.parentContext)}</span>`);
         }
         
+        // Add DOM path for element location
+        if (context.domPath) {
+          contextParts.push(`<span style="color: #28a745; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(context.domPath)}</span>`);
+        }
+        
         if (contextParts.length > 0) {
           contextHtml = `
             <div style="margin-bottom: 6px; padding: 4px; background: #f8f9fa; border-radius: 3px; font-size: 11px; line-height: 1.4;">
@@ -647,7 +713,6 @@ if (typeof module !== 'undefined' && module.exports) {
       
       statusContent.innerHTML = `
         ${contextHtml}
-        <div style="margin-bottom: 2px;"><strong>Selector:</strong> ${this.escapeHtml(elementInfo.selector)}</div>
         <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
       `;
     }
@@ -774,6 +839,11 @@ if (typeof module !== 'undefined' && module.exports) {
           contextParts.push(`<span style="color: #6c757d; font-style: italic;">In: ${this.escapeHtml(context.parentContext)}</span>`);
         }
         
+        // Add DOM path for element location
+        if (context.domPath) {
+          contextParts.push(`<span style="color: #155724; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(context.domPath)}</span>`);
+        }
+        
         if (contextParts.length > 0) {
           contextHtml = `
             <div style="margin-bottom: 6px; padding: 4px; background: #d4edda; border-radius: 3px; font-size: 11px; line-height: 1.4;">
@@ -789,7 +859,6 @@ if (typeof module !== 'undefined' && module.exports) {
       statusContent.innerHTML = `
         <div style="color: #28a745; font-weight: 600; margin-bottom: 4px;">✅ Element Selected!</div>
         ${contextHtml}
-        <div style="margin-bottom: 2px;"><strong>Selector:</strong> ${this.escapeHtml(elementInfo.selector)}</div>
         <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
       `;
     }
@@ -885,6 +954,11 @@ if (typeof module !== 'undefined' && module.exports) {
         contextParts.push(`In: "${this.escapeHtml(context.parentContext)}"`);
       }
       
+      // Add DOM path for element location
+      if (context.domPath) {
+        contextParts.push(`DOM Path: ${this.escapeHtml(context.domPath)}`);
+      }
+      
       if (contextParts.length > 0) {
         const contextDiv = document.createElement('div');
         contextDiv.style.cssText = `
@@ -900,24 +974,13 @@ if (typeof module !== 'undefined' && module.exports) {
       }
     }
     
-    const selectorSpan = document.createElement('div');
-    selectorSpan.style.cssText = `
-      font-family: monospace;
-      color: #495057;
-      margin-bottom: 4px;
-      word-break: break-all;
-      font-weight: 600;
-    `;
-    selectorSpan.innerHTML = '<strong>Selector:</strong> ' + this.escapeHtml(elementInfo.selector);
-    
     const textSpan = document.createElement('div');
     textSpan.style.cssText = `
-      color: #6c757d;
-      font-style: italic;
+      color: #495057;
+      font-weight: 600;
     `;
     textSpan.innerHTML = '<strong>Content:</strong> ' + (elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)');
     
-    preview.appendChild(selectorSpan);
     preview.appendChild(textSpan);
     
     return preview;
@@ -1063,12 +1126,10 @@ if (typeof module !== 'undefined' && module.exports) {
     // Add element info if available
     if (context.selectedElement) {
       const element = context.selectedElement;
-      contextText += `  - Element: ${this.escapeMarkdown(element.selector)}`;
       
       if (element.text && element.text.trim()) {
-        contextText += ` "${this.escapeMarkdown(element.text)}"`;
+        contextText += `  - Element Content: "${this.escapeMarkdown(element.text)}"\n`;
       }
-      contextText += '\n';
       
       // Add sibling context if available
       if (element.siblingContext) {
@@ -1096,6 +1157,11 @@ if (typeof module !== 'undefined' && module.exports) {
         // Add parent context if no siblings
         if (!siblingContext.prevSibling && !siblingContext.nextSibling && !siblingContext.label && siblingContext.parentContext) {
           contextParts.push(`In: "${this.escapeMarkdown(siblingContext.parentContext)}"`);
+        }
+        
+        // Add DOM path for element location
+        if (siblingContext.domPath) {
+          contextParts.push(`DOM Path: ${this.escapeMarkdown(siblingContext.domPath)}`);
         }
         
         if (contextParts.length > 0) {
@@ -1542,7 +1608,7 @@ if (typeof module !== 'undefined' && module.exports) {
           
           <div class="feedback-widget-actions">
             <button type="button" class="feedback-widget-cancel-btn">Cancel</button>
-            <button type="submit" class="feedback-widget-submit-btn">Submit Feedback</button>
+            <button type="submit" class="feedback-widget-submit-btn">Queue Feedback</button>
           </div>
         </form>
       </div>
@@ -1642,7 +1708,7 @@ if (typeof module !== 'undefined' && module.exports) {
       }
       
       FeedbackStorage.addFeedbackItem(feedbackItem);
-      this.showSuccess('Feedback submitted successfully!');
+      this.showSuccess('Feedback queued successfully! Don\'t forget to export your feedback when ready.');
       this.updateFeedbackCounter();
       
       setTimeout(() => {
@@ -1818,14 +1884,7 @@ if (typeof module !== 'undefined' && module.exports) {
       const markdown = FeedbackExport.generateMarkdown(items);
       FeedbackExport.downloadMarkdown(markdown);
       
-      // Ask if user wants to clear data after export
-      setTimeout(() => {
-        if (confirm('Export complete. Clear all feedback to start a new session?')) {
-          FeedbackStorage.clearAllFeedback();
-          this.updateFeedbackCounter();
-          this.refreshAdminPanel();
-        }
-      }, 1000);
+      // Export complete - no immediate clear prompt
       
     } catch (error) {
       this.showError('Export failed: ' + error.message);
