@@ -107,7 +107,51 @@ const ElementSelector = {
     
     const statusContent = this.statusBox.querySelector('.status-content');
     if (statusContent) {
+      let contextHtml = '';
+      
+      // Build context display if any context exists
+      if (elementInfo.siblingContext) {
+        const context = elementInfo.siblingContext;
+        const targetText = elementInfo.text ? this.escapeHtml(elementInfo.text) : '(element)';
+        let contextParts = [];
+        
+        // Add label context
+        if (context.label) {
+          contextParts.push(`<span style="color: #6f42c1; font-weight: 500;">${this.escapeHtml(context.label)}</span>`);
+        }
+        
+        // Add sibling context
+        if (context.prevSibling || context.nextSibling) {
+          let siblingDisplay = '';
+          if (context.prevSibling) {
+            siblingDisplay += `<span style="color: #888;">${this.escapeHtml(context.prevSibling)}</span> → `;
+          }
+          siblingDisplay += `<span style="background: #007bff; color: white; padding: 1px 4px; border-radius: 2px; font-weight: 600;">${targetText}</span>`;
+          if (context.nextSibling) {
+            siblingDisplay += ` → <span style="color: #888;">${this.escapeHtml(context.nextSibling)}</span>`;
+          }
+          contextParts.push(siblingDisplay);
+        }
+        
+        // Add parent context if no siblings
+        if (!context.prevSibling && !context.nextSibling && !context.label && context.parentContext) {
+          contextParts.push(`<span style="color: #6c757d; font-style: italic;">In: ${this.escapeHtml(context.parentContext)}</span>`);
+        }
+        
+        if (contextParts.length > 0) {
+          contextHtml = `
+            <div style="margin-bottom: 6px; padding: 4px; background: #f8f9fa; border-radius: 3px; font-size: 11px; line-height: 1.4;">
+              <div style="color: #666; margin-bottom: 2px;"><strong>Context:</strong></div>
+              <div style="font-family: monospace;">
+                ${contextParts.join('<br>')}
+              </div>
+            </div>
+          `;
+        }
+      }
+      
       statusContent.innerHTML = `
+        ${contextHtml}
         <div style="margin-bottom: 2px;"><strong>Selector:</strong> ${this.escapeHtml(elementInfo.selector)}</div>
         <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
       `;
@@ -204,8 +248,52 @@ const ElementSelector = {
     
     const statusContent = this.statusBox.querySelector('.status-content');
     if (statusContent) {
+      let contextHtml = '';
+      
+      // Build context display if any context exists
+      if (elementInfo.siblingContext) {
+        const context = elementInfo.siblingContext;
+        const targetText = elementInfo.text ? this.escapeHtml(elementInfo.text) : '(element)';
+        let contextParts = [];
+        
+        // Add label context
+        if (context.label) {
+          contextParts.push(`<span style="color: #6f42c1; font-weight: 500;">${this.escapeHtml(context.label)}</span>`);
+        }
+        
+        // Add sibling context
+        if (context.prevSibling || context.nextSibling) {
+          let siblingDisplay = '';
+          if (context.prevSibling) {
+            siblingDisplay += `<span style="color: #6c757d;">${this.escapeHtml(context.prevSibling)}</span> → `;
+          }
+          siblingDisplay += `<span style="background: #28a745; color: white; padding: 1px 4px; border-radius: 2px; font-weight: 600;">${targetText}</span>`;
+          if (context.nextSibling) {
+            siblingDisplay += ` → <span style="color: #6c757d;">${this.escapeHtml(context.nextSibling)}</span>`;
+          }
+          contextParts.push(siblingDisplay);
+        }
+        
+        // Add parent context if no siblings
+        if (!context.prevSibling && !context.nextSibling && !context.label && context.parentContext) {
+          contextParts.push(`<span style="color: #6c757d; font-style: italic;">In: ${this.escapeHtml(context.parentContext)}</span>`);
+        }
+        
+        if (contextParts.length > 0) {
+          contextHtml = `
+            <div style="margin-bottom: 6px; padding: 4px; background: #d4edda; border-radius: 3px; font-size: 11px; line-height: 1.4;">
+              <div style="color: #155724; margin-bottom: 2px;"><strong>Selected Context:</strong></div>
+              <div style="font-family: monospace;">
+                ${contextParts.join('<br>')}
+              </div>
+            </div>
+          `;
+        }
+      }
+      
       statusContent.innerHTML = `
         <div style="color: #28a745; font-weight: 600; margin-bottom: 4px;">✅ Element Selected!</div>
+        ${contextHtml}
         <div style="margin-bottom: 2px;"><strong>Selector:</strong> ${this.escapeHtml(elementInfo.selector)}</div>
         <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
       `;
@@ -268,10 +356,54 @@ const ElementSelector = {
       background-color: #f8f9fa;
       border: 1px solid #dee2e6;
       border-radius: 4px;
-      padding: 8px;
+      padding: 12px;
       font-size: 12px;
       margin: 8px 0;
+      line-height: 1.4;
     `;
+    
+    // Add context information if available
+    if (elementInfo.siblingContext) {
+      const context = elementInfo.siblingContext;
+      let contextParts = [];
+      
+      // Add label context
+      if (context.label) {
+        contextParts.push(`Label: "${this.escapeHtml(context.label)}"`);
+      }
+      
+      // Add sibling context
+      if (context.prevSibling || context.nextSibling) {
+        let siblingText = '';
+        if (context.prevSibling) {
+          siblingText += this.escapeHtml(context.prevSibling) + ' → ';
+        }
+        siblingText += '[THIS ELEMENT]';
+        if (context.nextSibling) {
+          siblingText += ' → ' + this.escapeHtml(context.nextSibling);
+        }
+        contextParts.push(`Context: ${siblingText}`);
+      }
+      
+      // Add parent context if no siblings
+      if (!context.prevSibling && !context.nextSibling && !context.label && context.parentContext) {
+        contextParts.push(`In: "${this.escapeHtml(context.parentContext)}"`);
+      }
+      
+      if (contextParts.length > 0) {
+        const contextDiv = document.createElement('div');
+        contextDiv.style.cssText = `
+          background: #e3f2fd;
+          border-left: 3px solid #1976d2;
+          padding: 6px 8px;
+          margin-bottom: 8px;
+          border-radius: 2px;
+          font-size: 11px;
+        `;
+        contextDiv.innerHTML = '<strong>Context:</strong><br>' + contextParts.map(part => '• ' + part).join('<br>');
+        preview.appendChild(contextDiv);
+      }
+    }
     
     const selectorSpan = document.createElement('div');
     selectorSpan.style.cssText = `
@@ -279,15 +411,16 @@ const ElementSelector = {
       color: #495057;
       margin-bottom: 4px;
       word-break: break-all;
+      font-weight: 600;
     `;
-    selectorSpan.textContent = elementInfo.selector;
+    selectorSpan.innerHTML = '<strong>Selector:</strong> ' + this.escapeHtml(elementInfo.selector);
     
     const textSpan = document.createElement('div');
     textSpan.style.cssText = `
       color: #6c757d;
       font-style: italic;
     `;
-    textSpan.textContent = elementInfo.text ? `"${elementInfo.text}"` : '(no text content)';
+    textSpan.innerHTML = '<strong>Content:</strong> ' + (elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)');
     
     preview.appendChild(selectorSpan);
     preview.appendChild(textSpan);

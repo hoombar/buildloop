@@ -135,6 +135,42 @@ const FeedbackExport = {
         contextText += ` "${this.escapeMarkdown(element.text)}"`;
       }
       contextText += '\n';
+      
+      // Add sibling context if available
+      if (element.siblingContext) {
+        const siblingContext = element.siblingContext;
+        const contextParts = [];
+        
+        // Add label context
+        if (siblingContext.label) {
+          contextParts.push(`Label: "${this.escapeMarkdown(siblingContext.label)}"`);
+        }
+        
+        // Add sibling context
+        if (siblingContext.prevSibling || siblingContext.nextSibling) {
+          let siblingText = '';
+          if (siblingContext.prevSibling) {
+            siblingText += this.escapeMarkdown(siblingContext.prevSibling) + ' → ';
+          }
+          siblingText += '[TARGET]';
+          if (siblingContext.nextSibling) {
+            siblingText += ' → ' + this.escapeMarkdown(siblingContext.nextSibling);
+          }
+          contextParts.push(`Context: ${siblingText}`);
+        }
+        
+        // Add parent context if no siblings
+        if (!siblingContext.prevSibling && !siblingContext.nextSibling && !siblingContext.label && siblingContext.parentContext) {
+          contextParts.push(`In: "${this.escapeMarkdown(siblingContext.parentContext)}"`);
+        }
+        
+        if (contextParts.length > 0) {
+          contextText += `  - **Element Context:**\n`;
+          contextParts.forEach(part => {
+            contextText += `    - ${part}\n`;
+          });
+        }
+      }
     }
     
     contextText += '\n';
