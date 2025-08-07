@@ -380,7 +380,7 @@ if (typeof module !== 'undefined' && module.exports) {
 }const ElementSelector = {
   isActive: false,
   selectedElement: null,
-  highlightOverlay: null,
+  statusBox: null,
   onElementSelected: null,
   originalCursor: null,
   
@@ -394,8 +394,8 @@ if (typeof module !== 'undefined' && module.exports) {
     // Change cursor to crosshair
     document.body.style.cursor = 'crosshair';
     
-    // Create highlight overlay
-    this.createHighlightOverlay();
+    // Create status box
+    this.createStatusBox();
     
     // Add event listeners
     document.addEventListener('mouseover', this.handleMouseOver);
@@ -418,8 +418,8 @@ if (typeof module !== 'undefined' && module.exports) {
     // Restore cursor
     document.body.style.cursor = this.originalCursor || '';
     
-    // Remove highlight overlay
-    this.removeHighlightOverlay();
+    // Remove status box
+    this.removeStatusBox();
     
     // Remove event listeners
     document.removeEventListener('mouseover', this.handleMouseOver);
@@ -430,51 +430,85 @@ if (typeof module !== 'undefined' && module.exports) {
     document.removeEventListener('selectstart', this.preventDefault);
   },
 
-  createHighlightOverlay() {
-    if (this.highlightOverlay) return;
+  createStatusBox() {
+    if (this.statusBox) return;
     
-    this.highlightOverlay = document.createElement('div');
-    this.highlightOverlay.className = 'feedback-widget-element-highlight';
-    this.highlightOverlay.style.cssText = `
+    this.statusBox = document.createElement('div');
+    this.statusBox.className = 'feedback-widget-status-box';
+    this.statusBox.style.cssText = `
       position: fixed;
-      pointer-events: none;
+      bottom: 20px;
+      left: 20px;
+      right: 20px;
+      max-width: 600px;
+      margin: 0 auto;
+      background: white;
       border: 2px solid #007bff;
-      background-color: rgba(0, 123, 255, 0.1);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+      padding: 12px 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
       z-index: 999999;
-      display: none;
+      pointer-events: none;
+      opacity: 0.95;
       box-sizing: border-box;
     `;
-    document.body.appendChild(this.highlightOverlay);
+    this.statusBox.innerHTML = `
+      <div style="font-weight: 600; color: #007bff; margin-bottom: 4px;">
+        🎯 Element Selection Mode - Hover over elements to preview
+      </div>
+      <div class="status-content" style="color: #666; font-family: monospace; font-size: 12px;">
+        Move your mouse over elements to see their details...
+      </div>
+    `;
+    document.body.appendChild(this.statusBox);
   },
 
-  removeHighlightOverlay() {
-    if (this.highlightOverlay) {
-      this.highlightOverlay.remove();
-      this.highlightOverlay = null;
+  removeStatusBox() {
+    if (this.statusBox) {
+      this.statusBox.remove();
+      this.statusBox = null;
     }
   },
 
-  updateHighlight(element) {
-    if (!this.highlightOverlay || !element) {
-      this.hideHighlight();
+  updateStatus(element) {
+    if (!this.statusBox || !element) {
+      this.hideStatus();
       return;
     }
     
-    const rect = element.getBoundingClientRect();
-    const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
-    const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+    const elementInfo = FeedbackContext.getElementInfo(element);
+    if (!elementInfo) {
+      this.hideStatus();
+      return;
+    }
     
-    this.highlightOverlay.style.display = 'block';
-    this.highlightOverlay.style.left = rect.left + scrollX + 'px';
-    this.highlightOverlay.style.top = rect.top + scrollY + 'px';
-    this.highlightOverlay.style.width = rect.width + 'px';
-    this.highlightOverlay.style.height = rect.height + 'px';
+    const statusContent = this.statusBox.querySelector('.status-content');
+    if (statusContent) {
+      statusContent.innerHTML = `
+        <div style="margin-bottom: 2px;"><strong>Selector:</strong> ${this.escapeHtml(elementInfo.selector)}</div>
+        <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
+      `;
+    }
+    
+    this.statusBox.style.display = 'block';
   },
 
-  hideHighlight() {
-    if (this.highlightOverlay) {
-      this.highlightOverlay.style.display = 'none';
+  hideStatus() {
+    if (this.statusBox) {
+      const statusContent = this.statusBox.querySelector('.status-content');
+      if (statusContent) {
+        statusContent.textContent = 'Move your mouse over elements to see their details...';
+      }
     }
+  },
+
+  escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   },
 
   handleMouseOver: function(e) {
@@ -482,16 +516,16 @@ if (typeof module !== 'undefined' && module.exports) {
     
     const element = e.target;
     if (!FeedbackContext.isValidElement(element)) {
-      ElementSelector.hideHighlight();
+      ElementSelector.hideStatus();
       return;
     }
     
-    ElementSelector.updateHighlight(element);
+    ElementSelector.updateStatus(element);
   }.bind(this),
 
   handleMouseOut: function(e) {
     if (!ElementSelector.isActive) return;
-    ElementSelector.hideHighlight();
+    ElementSelector.hideStatus();
   }.bind(this),
 
   handleClick: function(e) {
@@ -507,16 +541,18 @@ if (typeof module !== 'undefined' && module.exports) {
     
     ElementSelector.selectedElement = element;
     
-    // Show selection feedback
+    // Show selection feedback in status box
     ElementSelector.showSelectionFeedback(element);
     
-    // Call callback with selected element
-    if (ElementSelector.onElementSelected) {
-      ElementSelector.onElementSelected(element);
-    }
-    
-    // Deactivate selector
-    ElementSelector.deactivate();
+    // Call callback with selected element after a brief delay
+    setTimeout(() => {
+      if (ElementSelector.onElementSelected) {
+        ElementSelector.onElementSelected(element);
+      }
+      
+      // Deactivate selector
+      ElementSelector.deactivate();
+    }, 800);
   }.bind(this),
 
   handleKeyDown: function(e) {
@@ -536,18 +572,29 @@ if (typeof module !== 'undefined' && module.exports) {
   }.bind(this),
 
   showSelectionFeedback(element) {
-    // Temporarily change highlight to show selection
-    if (this.highlightOverlay) {
-      this.highlightOverlay.style.borderColor = '#28a745';
-      this.highlightOverlay.style.backgroundColor = 'rgba(40, 167, 69, 0.2)';
-      
-      // Reset after a short delay
-      setTimeout(() => {
-        if (this.highlightOverlay) {
-          this.highlightOverlay.style.borderColor = '#007bff';
-          this.highlightOverlay.style.backgroundColor = 'rgba(0, 123, 255, 0.1)';
-        }
-      }, 200);
+    if (!this.statusBox || !element) return;
+    
+    const elementInfo = FeedbackContext.getElementInfo(element);
+    if (!elementInfo) return;
+    
+    // Update status box to show selection confirmation
+    this.statusBox.style.borderColor = '#28a745';
+    this.statusBox.style.boxShadow = '0 4px 12px rgba(40, 167, 69, 0.3)';
+    
+    const statusContent = this.statusBox.querySelector('.status-content');
+    if (statusContent) {
+      statusContent.innerHTML = `
+        <div style="color: #28a745; font-weight: 600; margin-bottom: 4px;">✅ Element Selected!</div>
+        <div style="margin-bottom: 2px;"><strong>Selector:</strong> ${this.escapeHtml(elementInfo.selector)}</div>
+        <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
+      `;
+    }
+    
+    // Update header to show selection
+    const header = this.statusBox.querySelector('div');
+    if (header) {
+      header.innerHTML = '✅ Element Selected - Opening feedback form...';
+      header.style.color = '#28a745';
     }
   },
 
@@ -576,14 +623,14 @@ if (typeof module !== 'undefined' && module.exports) {
     return true;
   },
 
-  // Method to highlight element without selecting (for preview)
+  // Method to show element status without selecting (for preview)
   previewElement(element) {
     if (!this.canSelectElement(element)) {
-      this.hideHighlight();
+      this.hideStatus();
       return false;
     }
     
-    this.updateHighlight(element);
+    this.updateStatus(element);
     return true;
   },
 
