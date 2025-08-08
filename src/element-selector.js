@@ -4,6 +4,8 @@ const ElementSelector = {
   statusBox: null,
   onElementSelected: null,
   originalCursor: null,
+  lastMousePosition: { x: 0, y: 0 },
+  positionUpdateTimeout: null,
   
   activate(onElementSelectedCallback) {
     if (this.isActive) return;
@@ -21,6 +23,7 @@ const ElementSelector = {
     // Add event listeners
     document.addEventListener('mouseover', this.handleMouseOver);
     document.addEventListener('mouseout', this.handleMouseOut);
+    document.addEventListener('mousemove', this.handleMouseMove);
     document.addEventListener('click', this.handleClick, true);
     document.addEventListener('keydown', this.handleKeyDown);
     
@@ -45,10 +48,17 @@ const ElementSelector = {
     // Remove event listeners
     document.removeEventListener('mouseover', this.handleMouseOver);
     document.removeEventListener('mouseout', this.handleMouseOut);
+    document.removeEventListener('mousemove', this.handleMouseMove);
     document.removeEventListener('click', this.handleClick, true);
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('contextmenu', this.preventDefault);
     document.removeEventListener('selectstart', this.preventDefault);
+    
+    // Clear any pending position updates
+    if (this.positionUpdateTimeout) {
+      clearTimeout(this.positionUpdateTimeout);
+      this.positionUpdateTimeout = null;
+    }
   },
 
   createStatusBox() {
@@ -58,11 +68,8 @@ const ElementSelector = {
     this.statusBox.className = 'feedback-widget-status-box';
     this.statusBox.style.cssText = `
       position: fixed;
-      bottom: 20px;
-      left: 20px;
-      right: 20px;
+      width: 100%;
       max-width: 600px;
-      margin: 0 auto;
       background: white;
       border: 2px solid #007bff;
       border-radius: 8px;
@@ -74,7 +81,11 @@ const ElementSelector = {
       pointer-events: none;
       opacity: 0.95;
       box-sizing: border-box;
+      transition: all 0.3s ease;
     `;
+    
+    // Set initial position
+    this.positionStatusBox({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
     this.statusBox.innerHTML = `
       <div style="font-weight: 600; color: #007bff; margin-bottom: 4px;">
         🎯 Element Selection Mode - Hover over elements to preview
@@ -173,6 +184,117 @@ const ElementSelector = {
     }
   },
 
+  positionStatusBox(mousePos) {
+    if (!this.statusBox) return;
+    
+    const boxRect = this.statusBox.getBoundingClientRect();
+    const boxWidth = Math.min(600, window.innerWidth - 40); // Account for margins
+    const boxHeight = boxRect.height || 120; // Estimate if not rendered yet
+    
+    const margin = 20;
+    const cursorBuffer = 100; // Keep box at least 100px away from cursor
+    
+    // Calculate available areas
+    const areas = [
+      // Bottom center (preferred)
+      {
+        x: Math.max(margin, Math.min(window.innerWidth - boxWidth - margin, (window.innerWidth - boxWidth) / 2)),
+        y: window.innerHeight - boxHeight - margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          (window.innerWidth - boxWidth) / 2, 
+          window.innerHeight - boxHeight - margin, 
+          boxWidth, boxHeight),
+        position: 'bottom'
+      },
+      // Top center
+      {
+        x: Math.max(margin, Math.min(window.innerWidth - boxWidth - margin, (window.innerWidth - boxWidth) / 2)),
+        y: margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          (window.innerWidth - boxWidth) / 2, 
+          margin, 
+          boxWidth, boxHeight),
+        position: 'top'
+      },
+      // Bottom left
+      {
+        x: margin,
+        y: window.innerHeight - boxHeight - margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          margin, 
+          window.innerHeight - boxHeight - margin, 
+          boxWidth, boxHeight),
+        position: 'bottom-left'
+      },
+      // Bottom right
+      {
+        x: window.innerWidth - boxWidth - margin,
+        y: window.innerHeight - boxHeight - margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          window.innerWidth - boxWidth - margin, 
+          window.innerHeight - boxHeight - margin, 
+          boxWidth, boxHeight),
+        position: 'bottom-right'
+      },
+      // Top left
+      {
+        x: margin,
+        y: margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          margin, 
+          margin, 
+          boxWidth, boxHeight),
+        position: 'top-left'
+      },
+      // Top right
+      {
+        x: window.innerWidth - boxWidth - margin,
+        y: margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          window.innerWidth - boxWidth - margin, 
+          margin, 
+          boxWidth, boxHeight),
+        position: 'top-right'
+      }
+    ];
+    
+    // Sort by distance from cursor (furthest first) and prefer bottom positions
+    areas.sort((a, b) => {
+      // Prefer bottom positions when distances are similar
+      if (Math.abs(a.priority - b.priority) < cursorBuffer) {
+        if (a.position.includes('bottom') && !b.position.includes('bottom')) return -1;
+        if (!a.position.includes('bottom') && b.position.includes('bottom')) return 1;
+      }
+      return b.priority - a.priority;
+    });
+    
+    // Use the best position that keeps the box far enough from cursor
+    const bestPosition = areas.find(area => area.priority >= cursorBuffer) || areas[0];
+    
+    // Apply the position
+    this.statusBox.style.left = `${bestPosition.x}px`;
+    this.statusBox.style.top = `${bestPosition.y}px`;
+    this.statusBox.style.right = 'auto';
+    this.statusBox.style.bottom = 'auto';
+    this.statusBox.style.width = `${boxWidth}px`;
+  },
+
+  getDistanceFromCursor(mousePos, boxX, boxY, boxWidth, boxHeight) {
+    // Calculate the minimum distance from cursor to the box rectangle
+    const centerX = mousePos.x;
+    const centerY = mousePos.y;
+    
+    // Find the closest point on the box to the cursor
+    const closestX = Math.max(boxX, Math.min(centerX, boxX + boxWidth));
+    const closestY = Math.max(boxY, Math.min(centerY, boxY + boxHeight));
+    
+    // Calculate distance
+    const dx = centerX - closestX;
+    const dy = centerY - closestY;
+    
+    return Math.sqrt(dx * dx + dy * dy);
+  },
+
   escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -195,6 +317,21 @@ const ElementSelector = {
   handleMouseOut: function(e) {
     if (!ElementSelector.isActive) return;
     ElementSelector.hideStatus();
+  }.bind(this),
+
+  handleMouseMove: function(e) {
+    if (!ElementSelector.isActive) return;
+    
+    ElementSelector.lastMousePosition = { x: e.clientX, y: e.clientY };
+    
+    // Throttle position updates to avoid excessive calculations
+    if (ElementSelector.positionUpdateTimeout) {
+      clearTimeout(ElementSelector.positionUpdateTimeout);
+    }
+    
+    ElementSelector.positionUpdateTimeout = setTimeout(() => {
+      ElementSelector.positionStatusBox(ElementSelector.lastMousePosition);
+    }, 50); // Update every 50ms when moving
   }.bind(this),
 
   handleClick: function(e) {

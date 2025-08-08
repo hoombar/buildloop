@@ -1,6 +1,7 @@
 const FeedbackUI = {
   container: null,
   modal: null,
+  sessionGapModal: null,
   floatingButton: null,
   adminPanel: null,
   floatingMenu: null,
@@ -12,7 +13,9 @@ const FeedbackUI = {
     if (this.isInitialized) return;
     
     this.createContainer();
-    this.createFloatingButton();
+    if (FeedbackWidget.config.showFloatingButton) {
+      this.createFloatingButton();
+    }
     this.injectStyles();
     this.updateFeedbackCounter();
     
@@ -27,6 +30,11 @@ const FeedbackUI = {
   },
 
   createFloatingButton() {
+    // Remove existing button if present
+    if (this.floatingButton && this.floatingButton.parentNode) {
+      this.floatingButton.remove();
+    }
+    
     this.floatingButton = document.createElement('button');
     this.floatingButton.className = 'feedback-widget-floating-btn';
     this.floatingButton.innerHTML = `
@@ -75,13 +83,29 @@ const FeedbackUI = {
   },
 
   updateFeedbackCounter() {
+    // Ensure floating button exists if it should
+    if (!this.floatingButton && FeedbackWidget.config.showFloatingButton) {
+      this.createFloatingButton();
+    }
+    
     if (!this.floatingButton) return;
     
-    const count = FeedbackStorage.getFeedbackCount();
+    const totalCount = FeedbackStorage.getFeedbackCount();
+    const unexportedCount = FeedbackStorage.getUnexportedCount();
     const counter = this.floatingButton.querySelector('.feedback-btn-counter');
+    
     if (counter) {
-      counter.textContent = count.toString();
-      counter.style.display = count > 0 ? 'inline-block' : 'none';
+      // Show unexported count, or total if all are unexported
+      const displayCount = unexportedCount > 0 ? unexportedCount : totalCount;
+      counter.textContent = displayCount.toString();
+      counter.style.display = totalCount > 0 ? 'inline-block' : 'none';
+      
+      // Change color based on export status
+      if (unexportedCount > 0) {
+        counter.style.background = '#dc3545'; // Red for unexported
+      } else if (totalCount > 0) {
+        counter.style.background = '#28a745'; // Green for all exported
+      }
     }
   },
 
@@ -117,6 +141,7 @@ const FeedbackUI = {
     
     const items = FeedbackStorage.getFeedbackItems();
     const count = items.length;
+    const unexportedCount = FeedbackStorage.getUnexportedCount();
     
     menu.innerHTML = `
       <div class="feedback-menu-item" data-action="select-element">
@@ -126,12 +151,13 @@ const FeedbackUI = {
       <div class="feedback-menu-item" data-action="admin">
         <span class="feedback-menu-icon">⚙️</span>
         <span class="feedback-menu-text">Admin Panel</span>
-        <span class="feedback-menu-badge">${count}</span>
+        <span class="feedback-menu-badge" style="${unexportedCount > 0 ? 'background: #dc3545;' : (count > 0 ? 'background: #28a745;' : '')}">${count}</span>
       </div>
       ${count > 0 ? `
       <div class="feedback-menu-item" data-action="export">
         <span class="feedback-menu-icon">📥</span>
         <span class="feedback-menu-text">Export Feedback</span>
+        ${unexportedCount > 0 ? `<span class="feedback-menu-badge" style="background: #dc3545; font-size: 10px;">${unexportedCount}</span>` : ''}
       </div>
       <div class="feedback-menu-item" data-action="clear">
         <span class="feedback-menu-icon">🗑️</span>
@@ -171,6 +197,20 @@ const FeedbackUI = {
   },
 
   startElementSelectionForFeedback() {
+    // Check for session gap before starting feedback process
+    if (FeedbackStorage.shouldPromptNewSession()) {
+      FeedbackWidget.handleSessionGapPrompt(() => {
+        // After session gap is handled, continue with element selection
+        this.proceedWithElementSelection();
+      });
+      return;
+    }
+    
+    // No session gap, proceed directly
+    this.proceedWithElementSelection();
+  },
+
+  proceedWithElementSelection() {
     ElementSelector.activate((selectedElement) => {
       this.showFeedbackModalWithElement(selectedElement);
     });
@@ -195,6 +235,147 @@ const FeedbackUI = {
       const firstInput = this.modal.querySelector('select, textarea, input');
       if (firstInput) firstInput.focus();
     }, 100);
+  },
+
+  showSessionGapModal(onDecision) {
+    if (this.sessionGapModal) {
+      this.closeSessionGapModal();
+    }
+
+    const items = FeedbackStorage.getFeedbackItems();
+    const unexportedCount = FeedbackStorage.getUnexportedCount();
+    const hasUnexported = unexportedCount > 0;
+
+    this.sessionGapModal = this.createSessionGapModal(items, unexportedCount, hasUnexported, onDecision);
+    this.container.appendChild(this.sessionGapModal);
+    
+    // Focus first button
+    setTimeout(() => {
+      const firstButton = this.sessionGapModal.querySelector('.session-gap-action-btn');
+      if (firstButton) firstButton.focus();
+    }, 100);
+  },
+
+  createSessionGapModal(items, unexportedCount, hasUnexported, onDecision) {
+    const modal = document.createElement('div');
+    modal.className = 'feedback-widget-modal-overlay session-gap-modal';
+    
+    const lastActivity = FeedbackStorage.getLastActivity();
+    const hoursSince = Math.floor((Date.now() - lastActivity.getTime()) / (1000 * 60 * 60));
+    
+    modal.innerHTML = `
+      <div class="feedback-widget-modal session-gap-modal-content">
+        <div class="feedback-widget-header">
+          <h3>⏰ New Feedback Session</h3>
+          <button class="feedback-widget-close-btn session-gap-close" type="button">&times;</button>
+        </div>
+        
+        <div class="session-gap-content">
+          <div class="session-gap-info">
+            <p>It's been <strong>${hoursSince} hours</strong> since your last feedback activity.</p>
+            ${items.length > 0 ? `
+              <div class="session-gap-stats">
+                <div class="session-gap-stat">
+                  <span class="stat-number">${items.length}</span>
+                  <span class="stat-label">Total Items</span>
+                </div>
+                ${hasUnexported ? `
+                <div class="session-gap-stat unexported">
+                  <span class="stat-number">${unexportedCount}</span>
+                  <span class="stat-label">Unexported</span>
+                </div>
+                ` : `
+                <div class="session-gap-stat exported">
+                  <span class="stat-number">${items.length}</span>
+                  <span class="stat-label">All Exported</span>
+                </div>
+                `}
+              </div>
+            ` : '<p class="session-gap-empty">No existing feedback found.</p>'}
+          </div>
+          
+          ${hasUnexported && items.length > 0 ? `
+          <div class="session-gap-warning">
+            <p>⚠️ <strong>Warning:</strong> You have ${unexportedCount} unexported feedback item(s). 
+            Starting a new session will permanently delete this data.</p>
+          </div>
+          ` : ''}
+          
+          <div class="session-gap-question">
+            <p>How would you like to proceed?</p>
+          </div>
+        </div>
+        
+        <div class="session-gap-actions">
+          ${items.length > 0 ? `
+          <button type="button" class="session-gap-action-btn session-gap-new-btn" data-action="new">
+            <span class="btn-icon">🆕</span>
+            <div class="btn-content">
+              <div class="btn-title">Start New Session</div>
+              <div class="btn-subtitle">Clear old data & start fresh</div>
+            </div>
+          </button>
+          ` : ''}
+          
+          <button type="button" class="session-gap-action-btn session-gap-continue-btn" data-action="continue">
+            <span class="btn-icon">➕</span>
+            <div class="btn-content">
+              <div class="btn-title">${items.length > 0 ? 'Continue Existing Session' : 'Start Feedback Session'}</div>
+              <div class="btn-subtitle">${items.length > 0 ? 'Add to current feedback' : 'Begin adding feedback'}</div>
+            </div>
+          </button>
+        </div>
+      </div>
+    `;
+    
+    // Bind events
+    this.bindSessionGapModalEvents(modal, onDecision);
+    
+    return modal;
+  },
+
+  bindSessionGapModalEvents(modal, onDecision) {
+    const closeBtn = modal.querySelector('.session-gap-close');
+    const actionButtons = modal.querySelectorAll('.session-gap-action-btn');
+    
+    // Close modal events
+    closeBtn.addEventListener('click', () => {
+      this.closeSessionGapModal();
+      if (onDecision) onDecision('cancel');
+    });
+    
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        this.closeSessionGapModal();
+        if (onDecision) onDecision('cancel');
+      }
+    });
+    
+    // Action button events
+    actionButtons.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const action = e.currentTarget.getAttribute('data-action');
+        this.closeSessionGapModal();
+        if (onDecision) onDecision(action);
+      });
+    });
+    
+    // Escape key to close
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        this.closeSessionGapModal();
+        if (onDecision) onDecision('cancel');
+        document.removeEventListener('keydown', handleKeyDown);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+  },
+
+  closeSessionGapModal() {
+    if (this.sessionGapModal) {
+      this.sessionGapModal.remove();
+      this.sessionGapModal = null;
+    }
   },
 
   closeFloatingMenu() {
@@ -447,6 +628,7 @@ const FeedbackUI = {
     
     const items = FeedbackStorage.getFeedbackItems();
     const storageInfo = FeedbackStorage.getStorageInfo();
+    const unexportedCount = storageInfo.unexportedCount;
     
     panel.innerHTML = `
       <div class="feedback-widget-admin-header">
@@ -455,12 +637,18 @@ const FeedbackUI = {
       </div>
       
       <div class="feedback-widget-admin-actions">
-        <button class="feedback-widget-export-btn" ${items.length === 0 ? 'disabled' : ''}>Export All</button>
+        <button class="feedback-widget-export-btn" ${items.length === 0 ? 'disabled' : ''}>
+          Export All ${unexportedCount > 0 ? `(${unexportedCount} new)` : ''}
+        </button>
         <button class="feedback-widget-clear-btn" ${items.length === 0 ? 'disabled' : ''}>Clear All</button>
       </div>
       
       <div class="feedback-widget-storage-info">
-        <small>Storage: ${Math.round(storageInfo.currentSize / 1024)}KB used</small>
+        <small>
+          Storage: ${Math.round(storageInfo.currentSize / 1024)}KB used
+          ${unexportedCount > 0 ? `• <span style="color: #dc3545;">${unexportedCount} unexported</span>` : ''}
+          ${storageInfo.lastExportTimestamp ? `• Last export: ${new Date(storageInfo.lastExportTimestamp).toLocaleString()}` : ''}
+        </small>
       </div>
       
       <div class="feedback-widget-admin-list">
@@ -477,23 +665,32 @@ const FeedbackUI = {
       return '<p class="feedback-widget-empty">No feedback items yet.</p>';
     }
     
-    return items.map(item => `
-      <div class="feedback-widget-admin-item" data-id="${item.id}">
-        <div class="feedback-widget-item-header">
-          <span class="feedback-widget-item-type feedback-widget-type-${item.type}">${item.type}</span>
-          <span class="feedback-widget-item-priority feedback-widget-priority-${item.priority}">${item.priority}</span>
-          <button class="feedback-widget-delete-item-btn" data-id="${item.id}">Delete</button>
+    const exportStatus = FeedbackStorage.getExportStatus();
+    
+    return items.map(item => {
+      const isExported = exportStatus.exportedItemIds.includes(item.id);
+      
+      return `
+        <div class="feedback-widget-admin-item" data-id="${item.id}">
+          <div class="feedback-widget-item-header">
+            <span class="feedback-widget-item-type feedback-widget-type-${item.type}">${item.type}</span>
+            <span class="feedback-widget-item-priority feedback-widget-priority-${item.priority}">${item.priority}</span>
+            <span class="feedback-widget-export-status ${isExported ? 'exported' : 'unexported'}">
+              ${isExported ? '✓ Exported' : '⚠️ New'}
+            </span>
+            <button class="feedback-widget-delete-item-btn" data-id="${item.id}">Delete</button>
+          </div>
+          <div class="feedback-widget-item-message">${this.escapeHtml(item.message)}</div>
+          <div class="feedback-widget-item-context">
+            <small>
+              ${new Date(item.context.timestamp).toLocaleString()} | 
+              ${this.escapeHtml(item.context.pageTitle)}
+              ${item.context.selectedElement ? ' | Element: ' + this.escapeHtml(item.context.selectedElement.selector) : ''}
+            </small>
+          </div>
         </div>
-        <div class="feedback-widget-item-message">${this.escapeHtml(item.message)}</div>
-        <div class="feedback-widget-item-context">
-          <small>
-            ${new Date(item.context.timestamp).toLocaleString()} | 
-            ${this.escapeHtml(item.context.pageTitle)}
-            ${item.context.selectedElement ? ' | Element: ' + this.escapeHtml(item.context.selectedElement.selector) : ''}
-          </small>
-        </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
   },
 
   bindAdminEvents(panel) {
@@ -542,7 +739,12 @@ const FeedbackUI = {
       const markdown = FeedbackExport.generateMarkdown(items);
       FeedbackExport.downloadMarkdown(markdown);
       
-      // Export complete - no immediate clear prompt
+      // Mark items as exported
+      FeedbackStorage.markAsExported();
+      this.updateFeedbackCounter();
+      this.refreshAdminPanel();
+      
+      this.showSuccess(`Exported ${items.length} feedback items successfully!`);
       
     } catch (error) {
       this.showError('Export failed: ' + error.message);
@@ -987,11 +1189,192 @@ const FeedbackUI = {
         font-size: 12px;
       }
       
+      .feedback-widget-export-status {
+        padding: 2px 6px;
+        border-radius: 12px;
+        font-size: 10px;
+        font-weight: 500;
+        margin-left: auto;
+        margin-right: 8px;
+      }
+      
+      .feedback-widget-export-status.exported {
+        background: #d4edda;
+        color: #155724;
+      }
+      
+      .feedback-widget-export-status.unexported {
+        background: #f8d7da;
+        color: #721c24;
+      }
+      
       .feedback-widget-empty {
         padding: 40px 20px;
         text-align: center;
         color: #666;
         font-style: italic;
+      }
+      
+      /* Session Gap Modal Styles */
+      .session-gap-modal-content {
+        max-width: 480px;
+      }
+      
+      .session-gap-content {
+        padding: 20px;
+      }
+      
+      .session-gap-info {
+        margin-bottom: 20px;
+      }
+      
+      .session-gap-info p {
+        margin: 0 0 16px 0;
+        font-size: 14px;
+        line-height: 1.5;
+        color: #333;
+      }
+      
+      .session-gap-stats {
+        display: flex;
+        gap: 20px;
+        justify-content: center;
+        margin: 16px 0;
+        padding: 16px;
+        background: #f8f9fa;
+        border-radius: 8px;
+      }
+      
+      .session-gap-stat {
+        text-align: center;
+      }
+      
+      .session-gap-stat .stat-number {
+        display: block;
+        font-size: 24px;
+        font-weight: bold;
+        color: #333;
+      }
+      
+      .session-gap-stat .stat-label {
+        display: block;
+        font-size: 12px;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-top: 4px;
+      }
+      
+      .session-gap-stat.unexported .stat-number {
+        color: #dc3545;
+      }
+      
+      .session-gap-stat.exported .stat-number {
+        color: #28a745;
+      }
+      
+      .session-gap-empty {
+        text-align: center;
+        color: #666;
+        font-style: italic;
+        margin: 16px 0;
+      }
+      
+      .session-gap-warning {
+        background: #fff3cd;
+        border: 1px solid #ffeaa7;
+        border-radius: 6px;
+        padding: 16px;
+        margin: 16px 0;
+      }
+      
+      .session-gap-warning p {
+        margin: 0;
+        color: #856404;
+        font-size: 14px;
+      }
+      
+      .session-gap-question {
+        margin: 20px 0 0 0;
+      }
+      
+      .session-gap-question p {
+        margin: 0;
+        font-weight: 500;
+        color: #333;
+        text-align: center;
+      }
+      
+      .session-gap-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 0 20px 20px;
+      }
+      
+      .session-gap-action-btn {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 16px 20px;
+        border: 2px solid #e9ecef;
+        border-radius: 8px;
+        background: white;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-align: left;
+      }
+      
+      .session-gap-action-btn:hover {
+        border-color: #007bff;
+        box-shadow: 0 2px 8px rgba(0, 123, 255, 0.15);
+        transform: translateY(-1px);
+      }
+      
+      .session-gap-action-btn:active {
+        transform: translateY(0);
+      }
+      
+      .session-gap-action-btn .btn-icon {
+        font-size: 24px;
+        width: 32px;
+        text-align: center;
+        flex-shrink: 0;
+      }
+      
+      .session-gap-action-btn .btn-content {
+        flex: 1;
+      }
+      
+      .session-gap-action-btn .btn-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 4px;
+      }
+      
+      .session-gap-action-btn .btn-subtitle {
+        font-size: 13px;
+        color: #666;
+        line-height: 1.3;
+      }
+      
+      .session-gap-new-btn:hover {
+        border-color: #dc3545;
+        box-shadow: 0 2px 8px rgba(220, 53, 69, 0.15);
+      }
+      
+      .session-gap-new-btn .btn-icon {
+        color: #dc3545;
+      }
+      
+      .session-gap-continue-btn:hover {
+        border-color: #28a745;
+        box-shadow: 0 2px 8px rgba(40, 167, 69, 0.15);
+      }
+      
+      .session-gap-continue-btn .btn-icon {
+        color: #28a745;
       }
       
       @media (max-width: 480px) {
@@ -1002,6 +1385,29 @@ const FeedbackUI = {
         .feedback-widget-admin-panel {
           width: calc(100vw - 40px);
           right: 20px;
+        }
+        
+        .session-gap-modal-content {
+          margin: 10px;
+          max-width: calc(100vw - 20px);
+        }
+        
+        .session-gap-stats {
+          gap: 16px;
+        }
+        
+        .session-gap-action-btn {
+          gap: 12px;
+          padding: 14px 16px;
+        }
+        
+        .session-gap-action-btn .btn-icon {
+          font-size: 20px;
+          width: 24px;
+        }
+        
+        .session-gap-action-btn .btn-title {
+          font-size: 15px;
         }
       }
     `;
@@ -1022,6 +1428,7 @@ const FeedbackUI = {
     
     ElementSelector.deactivate();
     this.closeFloatingMenu();
+    this.closeSessionGapModal();
     this.isInitialized = false;
     this.isAdminPanelOpen = false;
     this.isContextMenuOpen = false;

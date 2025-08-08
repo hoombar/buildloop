@@ -1,5 +1,6 @@
 const FeedbackStorage = {
   STORAGE_KEY: 'feedback_widget_data',
+  EXPORT_STATUS_KEY: 'feedback_widget_export_status',
   MAX_STORAGE_SIZE: 4.5 * 1024 * 1024, // 4.5MB to leave room for other data
   
   isStorageAvailable() {
@@ -114,6 +115,7 @@ const FeedbackStorage = {
     if (!this.isStorageAvailable()) return false;
     try {
       localStorage.removeItem(this.STORAGE_KEY);
+      this.clearExportStatus(); // Also clear export tracking
       return true;
     } catch (e) {
       console.warn('Failed to clear feedback data:', e);
@@ -138,16 +140,84 @@ const FeedbackStorage = {
     if (!lastActivity) return false;
     
     const hoursSinceActivity = (Date.now() - lastActivity.getTime()) / (1000 * 60 * 60);
-    return hoursSinceActivity >= 24;
+    return hoursSinceActivity >= 12;
+  },
+
+  getExportStatus() {
+    if (!this.isStorageAvailable()) return { lastExportTimestamp: null, exportedItemIds: [] };
+    try {
+      const data = localStorage.getItem(this.EXPORT_STATUS_KEY);
+      return data ? JSON.parse(data) : { lastExportTimestamp: null, exportedItemIds: [] };
+    } catch (e) {
+      console.warn('Failed to parse export status from localStorage:', e);
+      return { lastExportTimestamp: null, exportedItemIds: [] };
+    }
+  },
+
+  saveExportStatus(exportStatus) {
+    if (!this.isStorageAvailable()) return false;
+    try {
+      localStorage.setItem(this.EXPORT_STATUS_KEY, JSON.stringify(exportStatus));
+      return true;
+    } catch (e) {
+      console.warn('Failed to save export status:', e);
+      return false;
+    }
+  },
+
+  markAsExported(itemIds = null) {
+    const items = this.getFeedbackItems();
+    const exportStatus = this.getExportStatus();
+    
+    // If no specific items provided, mark all current items as exported
+    const idsToMark = itemIds || items.map(item => item.id);
+    
+    // Update export status
+    exportStatus.lastExportTimestamp = Date.now();
+    exportStatus.exportedItemIds = [...new Set([...exportStatus.exportedItemIds, ...idsToMark])];
+    
+    return this.saveExportStatus(exportStatus);
+  },
+
+  hasUnexportedFeedback() {
+    const items = this.getFeedbackItems();
+    if (items.length === 0) return false;
+    
+    const exportStatus = this.getExportStatus();
+    return items.some(item => !exportStatus.exportedItemIds.includes(item.id));
+  },
+
+  getUnexportedItems() {
+    const items = this.getFeedbackItems();
+    const exportStatus = this.getExportStatus();
+    return items.filter(item => !exportStatus.exportedItemIds.includes(item.id));
+  },
+
+  getUnexportedCount() {
+    return this.getUnexportedItems().length;
+  },
+
+  clearExportStatus() {
+    if (!this.isStorageAvailable()) return false;
+    try {
+      localStorage.removeItem(this.EXPORT_STATUS_KEY);
+      return true;
+    } catch (e) {
+      console.warn('Failed to clear export status:', e);
+      return false;
+    }
   },
 
   getStorageInfo() {
+    const exportStatus = this.getExportStatus();
     return {
       available: this.isStorageAvailable(),
       currentSize: this.getCurrentStorageSize(),
       totalSize: this.getTotalStorageSize(),
       maxSize: this.MAX_STORAGE_SIZE,
-      itemCount: this.getFeedbackCount()
+      itemCount: this.getFeedbackCount(),
+      unexportedCount: this.getUnexportedCount(),
+      lastExportTimestamp: exportStatus.lastExportTimestamp
     };
   }
 };
@@ -560,6 +630,8 @@ if (typeof module !== 'undefined' && module.exports) {
   statusBox: null,
   onElementSelected: null,
   originalCursor: null,
+  lastMousePosition: { x: 0, y: 0 },
+  positionUpdateTimeout: null,
   
   activate(onElementSelectedCallback) {
     if (this.isActive) return;
@@ -577,6 +649,7 @@ if (typeof module !== 'undefined' && module.exports) {
     // Add event listeners
     document.addEventListener('mouseover', this.handleMouseOver);
     document.addEventListener('mouseout', this.handleMouseOut);
+    document.addEventListener('mousemove', this.handleMouseMove);
     document.addEventListener('click', this.handleClick, true);
     document.addEventListener('keydown', this.handleKeyDown);
     
@@ -601,10 +674,17 @@ if (typeof module !== 'undefined' && module.exports) {
     // Remove event listeners
     document.removeEventListener('mouseover', this.handleMouseOver);
     document.removeEventListener('mouseout', this.handleMouseOut);
+    document.removeEventListener('mousemove', this.handleMouseMove);
     document.removeEventListener('click', this.handleClick, true);
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('contextmenu', this.preventDefault);
     document.removeEventListener('selectstart', this.preventDefault);
+    
+    // Clear any pending position updates
+    if (this.positionUpdateTimeout) {
+      clearTimeout(this.positionUpdateTimeout);
+      this.positionUpdateTimeout = null;
+    }
   },
 
   createStatusBox() {
@@ -614,11 +694,8 @@ if (typeof module !== 'undefined' && module.exports) {
     this.statusBox.className = 'feedback-widget-status-box';
     this.statusBox.style.cssText = `
       position: fixed;
-      bottom: 20px;
-      left: 20px;
-      right: 20px;
+      width: 100%;
       max-width: 600px;
-      margin: 0 auto;
       background: white;
       border: 2px solid #007bff;
       border-radius: 8px;
@@ -630,7 +707,11 @@ if (typeof module !== 'undefined' && module.exports) {
       pointer-events: none;
       opacity: 0.95;
       box-sizing: border-box;
+      transition: all 0.3s ease;
     `;
+    
+    // Set initial position
+    this.positionStatusBox({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
     this.statusBox.innerHTML = `
       <div style="font-weight: 600; color: #007bff; margin-bottom: 4px;">
         🎯 Element Selection Mode - Hover over elements to preview
@@ -729,6 +810,117 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   },
 
+  positionStatusBox(mousePos) {
+    if (!this.statusBox) return;
+    
+    const boxRect = this.statusBox.getBoundingClientRect();
+    const boxWidth = Math.min(600, window.innerWidth - 40); // Account for margins
+    const boxHeight = boxRect.height || 120; // Estimate if not rendered yet
+    
+    const margin = 20;
+    const cursorBuffer = 100; // Keep box at least 100px away from cursor
+    
+    // Calculate available areas
+    const areas = [
+      // Bottom center (preferred)
+      {
+        x: Math.max(margin, Math.min(window.innerWidth - boxWidth - margin, (window.innerWidth - boxWidth) / 2)),
+        y: window.innerHeight - boxHeight - margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          (window.innerWidth - boxWidth) / 2, 
+          window.innerHeight - boxHeight - margin, 
+          boxWidth, boxHeight),
+        position: 'bottom'
+      },
+      // Top center
+      {
+        x: Math.max(margin, Math.min(window.innerWidth - boxWidth - margin, (window.innerWidth - boxWidth) / 2)),
+        y: margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          (window.innerWidth - boxWidth) / 2, 
+          margin, 
+          boxWidth, boxHeight),
+        position: 'top'
+      },
+      // Bottom left
+      {
+        x: margin,
+        y: window.innerHeight - boxHeight - margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          margin, 
+          window.innerHeight - boxHeight - margin, 
+          boxWidth, boxHeight),
+        position: 'bottom-left'
+      },
+      // Bottom right
+      {
+        x: window.innerWidth - boxWidth - margin,
+        y: window.innerHeight - boxHeight - margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          window.innerWidth - boxWidth - margin, 
+          window.innerHeight - boxHeight - margin, 
+          boxWidth, boxHeight),
+        position: 'bottom-right'
+      },
+      // Top left
+      {
+        x: margin,
+        y: margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          margin, 
+          margin, 
+          boxWidth, boxHeight),
+        position: 'top-left'
+      },
+      // Top right
+      {
+        x: window.innerWidth - boxWidth - margin,
+        y: margin,
+        priority: this.getDistanceFromCursor(mousePos, 
+          window.innerWidth - boxWidth - margin, 
+          margin, 
+          boxWidth, boxHeight),
+        position: 'top-right'
+      }
+    ];
+    
+    // Sort by distance from cursor (furthest first) and prefer bottom positions
+    areas.sort((a, b) => {
+      // Prefer bottom positions when distances are similar
+      if (Math.abs(a.priority - b.priority) < cursorBuffer) {
+        if (a.position.includes('bottom') && !b.position.includes('bottom')) return -1;
+        if (!a.position.includes('bottom') && b.position.includes('bottom')) return 1;
+      }
+      return b.priority - a.priority;
+    });
+    
+    // Use the best position that keeps the box far enough from cursor
+    const bestPosition = areas.find(area => area.priority >= cursorBuffer) || areas[0];
+    
+    // Apply the position
+    this.statusBox.style.left = `${bestPosition.x}px`;
+    this.statusBox.style.top = `${bestPosition.y}px`;
+    this.statusBox.style.right = 'auto';
+    this.statusBox.style.bottom = 'auto';
+    this.statusBox.style.width = `${boxWidth}px`;
+  },
+
+  getDistanceFromCursor(mousePos, boxX, boxY, boxWidth, boxHeight) {
+    // Calculate the minimum distance from cursor to the box rectangle
+    const centerX = mousePos.x;
+    const centerY = mousePos.y;
+    
+    // Find the closest point on the box to the cursor
+    const closestX = Math.max(boxX, Math.min(centerX, boxX + boxWidth));
+    const closestY = Math.max(boxY, Math.min(centerY, boxY + boxHeight));
+    
+    // Calculate distance
+    const dx = centerX - closestX;
+    const dy = centerY - closestY;
+    
+    return Math.sqrt(dx * dx + dy * dy);
+  },
+
   escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -751,6 +943,21 @@ if (typeof module !== 'undefined' && module.exports) {
   handleMouseOut: function(e) {
     if (!ElementSelector.isActive) return;
     ElementSelector.hideStatus();
+  }.bind(this),
+
+  handleMouseMove: function(e) {
+    if (!ElementSelector.isActive) return;
+    
+    ElementSelector.lastMousePosition = { x: e.clientX, y: e.clientY };
+    
+    // Throttle position updates to avoid excessive calculations
+    if (ElementSelector.positionUpdateTimeout) {
+      clearTimeout(ElementSelector.positionUpdateTimeout);
+    }
+    
+    ElementSelector.positionUpdateTimeout = setTimeout(() => {
+      ElementSelector.positionStatusBox(ElementSelector.lastMousePosition);
+    }, 50); // Update every 50ms when moving
   }.bind(this),
 
   handleClick: function(e) {
@@ -1343,6 +1550,7 @@ if (typeof module !== 'undefined' && module.exports) {
 }const FeedbackUI = {
   container: null,
   modal: null,
+  sessionGapModal: null,
   floatingButton: null,
   adminPanel: null,
   floatingMenu: null,
@@ -1354,7 +1562,9 @@ if (typeof module !== 'undefined' && module.exports) {
     if (this.isInitialized) return;
     
     this.createContainer();
-    this.createFloatingButton();
+    if (FeedbackWidget.config.showFloatingButton) {
+      this.createFloatingButton();
+    }
     this.injectStyles();
     this.updateFeedbackCounter();
     
@@ -1369,6 +1579,11 @@ if (typeof module !== 'undefined' && module.exports) {
   },
 
   createFloatingButton() {
+    // Remove existing button if present
+    if (this.floatingButton && this.floatingButton.parentNode) {
+      this.floatingButton.remove();
+    }
+    
     this.floatingButton = document.createElement('button');
     this.floatingButton.className = 'feedback-widget-floating-btn';
     this.floatingButton.innerHTML = `
@@ -1417,13 +1632,29 @@ if (typeof module !== 'undefined' && module.exports) {
   },
 
   updateFeedbackCounter() {
+    // Ensure floating button exists if it should
+    if (!this.floatingButton && FeedbackWidget.config.showFloatingButton) {
+      this.createFloatingButton();
+    }
+    
     if (!this.floatingButton) return;
     
-    const count = FeedbackStorage.getFeedbackCount();
+    const totalCount = FeedbackStorage.getFeedbackCount();
+    const unexportedCount = FeedbackStorage.getUnexportedCount();
     const counter = this.floatingButton.querySelector('.feedback-btn-counter');
+    
     if (counter) {
-      counter.textContent = count.toString();
-      counter.style.display = count > 0 ? 'inline-block' : 'none';
+      // Show unexported count, or total if all are unexported
+      const displayCount = unexportedCount > 0 ? unexportedCount : totalCount;
+      counter.textContent = displayCount.toString();
+      counter.style.display = totalCount > 0 ? 'inline-block' : 'none';
+      
+      // Change color based on export status
+      if (unexportedCount > 0) {
+        counter.style.background = '#dc3545'; // Red for unexported
+      } else if (totalCount > 0) {
+        counter.style.background = '#28a745'; // Green for all exported
+      }
     }
   },
 
@@ -1459,6 +1690,7 @@ if (typeof module !== 'undefined' && module.exports) {
     
     const items = FeedbackStorage.getFeedbackItems();
     const count = items.length;
+    const unexportedCount = FeedbackStorage.getUnexportedCount();
     
     menu.innerHTML = `
       <div class="feedback-menu-item" data-action="select-element">
@@ -1468,12 +1700,13 @@ if (typeof module !== 'undefined' && module.exports) {
       <div class="feedback-menu-item" data-action="admin">
         <span class="feedback-menu-icon">⚙️</span>
         <span class="feedback-menu-text">Admin Panel</span>
-        <span class="feedback-menu-badge">${count}</span>
+        <span class="feedback-menu-badge" style="${unexportedCount > 0 ? 'background: #dc3545;' : (count > 0 ? 'background: #28a745;' : '')}">${count}</span>
       </div>
       ${count > 0 ? `
       <div class="feedback-menu-item" data-action="export">
         <span class="feedback-menu-icon">📥</span>
         <span class="feedback-menu-text">Export Feedback</span>
+        ${unexportedCount > 0 ? `<span class="feedback-menu-badge" style="background: #dc3545; font-size: 10px;">${unexportedCount}</span>` : ''}
       </div>
       <div class="feedback-menu-item" data-action="clear">
         <span class="feedback-menu-icon">🗑️</span>
@@ -1513,6 +1746,20 @@ if (typeof module !== 'undefined' && module.exports) {
   },
 
   startElementSelectionForFeedback() {
+    // Check for session gap before starting feedback process
+    if (FeedbackStorage.shouldPromptNewSession()) {
+      FeedbackWidget.handleSessionGapPrompt(() => {
+        // After session gap is handled, continue with element selection
+        this.proceedWithElementSelection();
+      });
+      return;
+    }
+    
+    // No session gap, proceed directly
+    this.proceedWithElementSelection();
+  },
+
+  proceedWithElementSelection() {
     ElementSelector.activate((selectedElement) => {
       this.showFeedbackModalWithElement(selectedElement);
     });
@@ -1537,6 +1784,147 @@ if (typeof module !== 'undefined' && module.exports) {
       const firstInput = this.modal.querySelector('select, textarea, input');
       if (firstInput) firstInput.focus();
     }, 100);
+  },
+
+  showSessionGapModal(onDecision) {
+    if (this.sessionGapModal) {
+      this.closeSessionGapModal();
+    }
+
+    const items = FeedbackStorage.getFeedbackItems();
+    const unexportedCount = FeedbackStorage.getUnexportedCount();
+    const hasUnexported = unexportedCount > 0;
+
+    this.sessionGapModal = this.createSessionGapModal(items, unexportedCount, hasUnexported, onDecision);
+    this.container.appendChild(this.sessionGapModal);
+    
+    // Focus first button
+    setTimeout(() => {
+      const firstButton = this.sessionGapModal.querySelector('.session-gap-action-btn');
+      if (firstButton) firstButton.focus();
+    }, 100);
+  },
+
+  createSessionGapModal(items, unexportedCount, hasUnexported, onDecision) {
+    const modal = document.createElement('div');
+    modal.className = 'feedback-widget-modal-overlay session-gap-modal';
+    
+    const lastActivity = FeedbackStorage.getLastActivity();
+    const hoursSince = Math.floor((Date.now() - lastActivity.getTime()) / (1000 * 60 * 60));
+    
+    modal.innerHTML = `
+      <div class="feedback-widget-modal session-gap-modal-content">
+        <div class="feedback-widget-header">
+          <h3>⏰ New Feedback Session</h3>
+          <button class="feedback-widget-close-btn session-gap-close" type="button">&times;</button>
+        </div>
+        
+        <div class="session-gap-content">
+          <div class="session-gap-info">
+            <p>It's been <strong>${hoursSince} hours</strong> since your last feedback activity.</p>
+            ${items.length > 0 ? `
+              <div class="session-gap-stats">
+                <div class="session-gap-stat">
+                  <span class="stat-number">${items.length}</span>
+                  <span class="stat-label">Total Items</span>
+                </div>
+                ${hasUnexported ? `
+                <div class="session-gap-stat unexported">
+                  <span class="stat-number">${unexportedCount}</span>
+                  <span class="stat-label">Unexported</span>
+                </div>
+                ` : `
+                <div class="session-gap-stat exported">
+                  <span class="stat-number">${items.length}</span>
+                  <span class="stat-label">All Exported</span>
+                </div>
+                `}
+              </div>
+            ` : '<p class="session-gap-empty">No existing feedback found.</p>'}
+          </div>
+          
+          ${hasUnexported && items.length > 0 ? `
+          <div class="session-gap-warning">
+            <p>⚠️ <strong>Warning:</strong> You have ${unexportedCount} unexported feedback item(s). 
+            Starting a new session will permanently delete this data.</p>
+          </div>
+          ` : ''}
+          
+          <div class="session-gap-question">
+            <p>How would you like to proceed?</p>
+          </div>
+        </div>
+        
+        <div class="session-gap-actions">
+          ${items.length > 0 ? `
+          <button type="button" class="session-gap-action-btn session-gap-new-btn" data-action="new">
+            <span class="btn-icon">🆕</span>
+            <div class="btn-content">
+              <div class="btn-title">Start New Session</div>
+              <div class="btn-subtitle">Clear old data & start fresh</div>
+            </div>
+          </button>
+          ` : ''}
+          
+          <button type="button" class="session-gap-action-btn session-gap-continue-btn" data-action="continue">
+            <span class="btn-icon">➕</span>
+            <div class="btn-content">
+              <div class="btn-title">${items.length > 0 ? 'Continue Existing Session' : 'Start Feedback Session'}</div>
+              <div class="btn-subtitle">${items.length > 0 ? 'Add to current feedback' : 'Begin adding feedback'}</div>
+            </div>
+          </button>
+        </div>
+      </div>
+    `;
+    
+    // Bind events
+    this.bindSessionGapModalEvents(modal, onDecision);
+    
+    return modal;
+  },
+
+  bindSessionGapModalEvents(modal, onDecision) {
+    const closeBtn = modal.querySelector('.session-gap-close');
+    const actionButtons = modal.querySelectorAll('.session-gap-action-btn');
+    
+    // Close modal events
+    closeBtn.addEventListener('click', () => {
+      this.closeSessionGapModal();
+      if (onDecision) onDecision('cancel');
+    });
+    
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        this.closeSessionGapModal();
+        if (onDecision) onDecision('cancel');
+      }
+    });
+    
+    // Action button events
+    actionButtons.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const action = e.currentTarget.getAttribute('data-action');
+        this.closeSessionGapModal();
+        if (onDecision) onDecision(action);
+      });
+    });
+    
+    // Escape key to close
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        this.closeSessionGapModal();
+        if (onDecision) onDecision('cancel');
+        document.removeEventListener('keydown', handleKeyDown);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+  },
+
+  closeSessionGapModal() {
+    if (this.sessionGapModal) {
+      this.sessionGapModal.remove();
+      this.sessionGapModal = null;
+    }
   },
 
   closeFloatingMenu() {
@@ -1789,6 +2177,7 @@ if (typeof module !== 'undefined' && module.exports) {
     
     const items = FeedbackStorage.getFeedbackItems();
     const storageInfo = FeedbackStorage.getStorageInfo();
+    const unexportedCount = storageInfo.unexportedCount;
     
     panel.innerHTML = `
       <div class="feedback-widget-admin-header">
@@ -1797,12 +2186,18 @@ if (typeof module !== 'undefined' && module.exports) {
       </div>
       
       <div class="feedback-widget-admin-actions">
-        <button class="feedback-widget-export-btn" ${items.length === 0 ? 'disabled' : ''}>Export All</button>
+        <button class="feedback-widget-export-btn" ${items.length === 0 ? 'disabled' : ''}>
+          Export All ${unexportedCount > 0 ? `(${unexportedCount} new)` : ''}
+        </button>
         <button class="feedback-widget-clear-btn" ${items.length === 0 ? 'disabled' : ''}>Clear All</button>
       </div>
       
       <div class="feedback-widget-storage-info">
-        <small>Storage: ${Math.round(storageInfo.currentSize / 1024)}KB used</small>
+        <small>
+          Storage: ${Math.round(storageInfo.currentSize / 1024)}KB used
+          ${unexportedCount > 0 ? `• <span style="color: #dc3545;">${unexportedCount} unexported</span>` : ''}
+          ${storageInfo.lastExportTimestamp ? `• Last export: ${new Date(storageInfo.lastExportTimestamp).toLocaleString()}` : ''}
+        </small>
       </div>
       
       <div class="feedback-widget-admin-list">
@@ -1819,23 +2214,32 @@ if (typeof module !== 'undefined' && module.exports) {
       return '<p class="feedback-widget-empty">No feedback items yet.</p>';
     }
     
-    return items.map(item => `
-      <div class="feedback-widget-admin-item" data-id="${item.id}">
-        <div class="feedback-widget-item-header">
-          <span class="feedback-widget-item-type feedback-widget-type-${item.type}">${item.type}</span>
-          <span class="feedback-widget-item-priority feedback-widget-priority-${item.priority}">${item.priority}</span>
-          <button class="feedback-widget-delete-item-btn" data-id="${item.id}">Delete</button>
+    const exportStatus = FeedbackStorage.getExportStatus();
+    
+    return items.map(item => {
+      const isExported = exportStatus.exportedItemIds.includes(item.id);
+      
+      return `
+        <div class="feedback-widget-admin-item" data-id="${item.id}">
+          <div class="feedback-widget-item-header">
+            <span class="feedback-widget-item-type feedback-widget-type-${item.type}">${item.type}</span>
+            <span class="feedback-widget-item-priority feedback-widget-priority-${item.priority}">${item.priority}</span>
+            <span class="feedback-widget-export-status ${isExported ? 'exported' : 'unexported'}">
+              ${isExported ? '✓ Exported' : '⚠️ New'}
+            </span>
+            <button class="feedback-widget-delete-item-btn" data-id="${item.id}">Delete</button>
+          </div>
+          <div class="feedback-widget-item-message">${this.escapeHtml(item.message)}</div>
+          <div class="feedback-widget-item-context">
+            <small>
+              ${new Date(item.context.timestamp).toLocaleString()} | 
+              ${this.escapeHtml(item.context.pageTitle)}
+              ${item.context.selectedElement ? ' | Element: ' + this.escapeHtml(item.context.selectedElement.selector) : ''}
+            </small>
+          </div>
         </div>
-        <div class="feedback-widget-item-message">${this.escapeHtml(item.message)}</div>
-        <div class="feedback-widget-item-context">
-          <small>
-            ${new Date(item.context.timestamp).toLocaleString()} | 
-            ${this.escapeHtml(item.context.pageTitle)}
-            ${item.context.selectedElement ? ' | Element: ' + this.escapeHtml(item.context.selectedElement.selector) : ''}
-          </small>
-        </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
   },
 
   bindAdminEvents(panel) {
@@ -1884,7 +2288,12 @@ if (typeof module !== 'undefined' && module.exports) {
       const markdown = FeedbackExport.generateMarkdown(items);
       FeedbackExport.downloadMarkdown(markdown);
       
-      // Export complete - no immediate clear prompt
+      // Mark items as exported
+      FeedbackStorage.markAsExported();
+      this.updateFeedbackCounter();
+      this.refreshAdminPanel();
+      
+      this.showSuccess(`Exported ${items.length} feedback items successfully!`);
       
     } catch (error) {
       this.showError('Export failed: ' + error.message);
@@ -2329,11 +2738,192 @@ if (typeof module !== 'undefined' && module.exports) {
         font-size: 12px;
       }
       
+      .feedback-widget-export-status {
+        padding: 2px 6px;
+        border-radius: 12px;
+        font-size: 10px;
+        font-weight: 500;
+        margin-left: auto;
+        margin-right: 8px;
+      }
+      
+      .feedback-widget-export-status.exported {
+        background: #d4edda;
+        color: #155724;
+      }
+      
+      .feedback-widget-export-status.unexported {
+        background: #f8d7da;
+        color: #721c24;
+      }
+      
       .feedback-widget-empty {
         padding: 40px 20px;
         text-align: center;
         color: #666;
         font-style: italic;
+      }
+      
+      /* Session Gap Modal Styles */
+      .session-gap-modal-content {
+        max-width: 480px;
+      }
+      
+      .session-gap-content {
+        padding: 20px;
+      }
+      
+      .session-gap-info {
+        margin-bottom: 20px;
+      }
+      
+      .session-gap-info p {
+        margin: 0 0 16px 0;
+        font-size: 14px;
+        line-height: 1.5;
+        color: #333;
+      }
+      
+      .session-gap-stats {
+        display: flex;
+        gap: 20px;
+        justify-content: center;
+        margin: 16px 0;
+        padding: 16px;
+        background: #f8f9fa;
+        border-radius: 8px;
+      }
+      
+      .session-gap-stat {
+        text-align: center;
+      }
+      
+      .session-gap-stat .stat-number {
+        display: block;
+        font-size: 24px;
+        font-weight: bold;
+        color: #333;
+      }
+      
+      .session-gap-stat .stat-label {
+        display: block;
+        font-size: 12px;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-top: 4px;
+      }
+      
+      .session-gap-stat.unexported .stat-number {
+        color: #dc3545;
+      }
+      
+      .session-gap-stat.exported .stat-number {
+        color: #28a745;
+      }
+      
+      .session-gap-empty {
+        text-align: center;
+        color: #666;
+        font-style: italic;
+        margin: 16px 0;
+      }
+      
+      .session-gap-warning {
+        background: #fff3cd;
+        border: 1px solid #ffeaa7;
+        border-radius: 6px;
+        padding: 16px;
+        margin: 16px 0;
+      }
+      
+      .session-gap-warning p {
+        margin: 0;
+        color: #856404;
+        font-size: 14px;
+      }
+      
+      .session-gap-question {
+        margin: 20px 0 0 0;
+      }
+      
+      .session-gap-question p {
+        margin: 0;
+        font-weight: 500;
+        color: #333;
+        text-align: center;
+      }
+      
+      .session-gap-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 0 20px 20px;
+      }
+      
+      .session-gap-action-btn {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 16px 20px;
+        border: 2px solid #e9ecef;
+        border-radius: 8px;
+        background: white;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        text-align: left;
+      }
+      
+      .session-gap-action-btn:hover {
+        border-color: #007bff;
+        box-shadow: 0 2px 8px rgba(0, 123, 255, 0.15);
+        transform: translateY(-1px);
+      }
+      
+      .session-gap-action-btn:active {
+        transform: translateY(0);
+      }
+      
+      .session-gap-action-btn .btn-icon {
+        font-size: 24px;
+        width: 32px;
+        text-align: center;
+        flex-shrink: 0;
+      }
+      
+      .session-gap-action-btn .btn-content {
+        flex: 1;
+      }
+      
+      .session-gap-action-btn .btn-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 4px;
+      }
+      
+      .session-gap-action-btn .btn-subtitle {
+        font-size: 13px;
+        color: #666;
+        line-height: 1.3;
+      }
+      
+      .session-gap-new-btn:hover {
+        border-color: #dc3545;
+        box-shadow: 0 2px 8px rgba(220, 53, 69, 0.15);
+      }
+      
+      .session-gap-new-btn .btn-icon {
+        color: #dc3545;
+      }
+      
+      .session-gap-continue-btn:hover {
+        border-color: #28a745;
+        box-shadow: 0 2px 8px rgba(40, 167, 69, 0.15);
+      }
+      
+      .session-gap-continue-btn .btn-icon {
+        color: #28a745;
       }
       
       @media (max-width: 480px) {
@@ -2344,6 +2934,29 @@ if (typeof module !== 'undefined' && module.exports) {
         .feedback-widget-admin-panel {
           width: calc(100vw - 40px);
           right: 20px;
+        }
+        
+        .session-gap-modal-content {
+          margin: 10px;
+          max-width: calc(100vw - 20px);
+        }
+        
+        .session-gap-stats {
+          gap: 16px;
+        }
+        
+        .session-gap-action-btn {
+          gap: 12px;
+          padding: 14px 16px;
+        }
+        
+        .session-gap-action-btn .btn-icon {
+          font-size: 20px;
+          width: 24px;
+        }
+        
+        .session-gap-action-btn .btn-title {
+          font-size: 15px;
         }
       }
     `;
@@ -2364,6 +2977,7 @@ if (typeof module !== 'undefined' && module.exports) {
     
     ElementSelector.deactivate();
     this.closeFloatingMenu();
+    this.closeSessionGapModal();
     this.isInitialized = false;
     this.isAdminPanelOpen = false;
     this.isContextMenuOpen = false;
@@ -2382,7 +2996,7 @@ if (typeof module !== 'undefined' && module.exports) {
   config: {
     autoInit: true,
     showFloatingButton: true,
-    sessionGapHours: 24
+    sessionGapHours: 12
   },
   
   isInitialized: false,
@@ -2397,9 +3011,6 @@ if (typeof module !== 'undefined' && module.exports) {
     this.config = { ...this.config, ...customConfig };
     
     try {
-      // Check for session gap and prompt if needed
-      this.checkSessionGap();
-      
       // Initialize UI
       FeedbackUI.init();
       
@@ -2421,24 +3032,87 @@ if (typeof module !== 'undefined' && module.exports) {
 
   checkSessionGap() {
     if (FeedbackStorage.shouldPromptNewSession()) {
-      const shouldClear = confirm(
-        'Start new feedback session? Previous session will be cleared.\n\n' +
-        'Click OK to clear old feedback, or Cancel to continue with existing feedback.'
-      );
-      
-      if (shouldClear) {
+      this.handleSessionGapPrompt();
+    }
+  },
+
+  handleSessionGapPrompt(onComplete) {
+    FeedbackUI.showSessionGapModal((decision) => {
+      this.handleSessionGapDecision(decision, onComplete);
+    });
+  },
+
+  handleSessionGapDecision(decision, onComplete) {
+    const items = FeedbackStorage.getFeedbackItems();
+    const hasUnexported = FeedbackStorage.hasUnexportedFeedback();
+    
+    switch (decision) {
+      case 'new':
+        this.startNewSession(items, hasUnexported);
+        // After clearing/exporting, continue with the original action
+        if (onComplete) onComplete();
+        break;
+      case 'continue':
+        this.continueExistingSession();
+        // Continue with the original action (element selection)
+        if (onComplete) onComplete();
+        break;
+      case 'cancel':
+        // User canceled, don't call onComplete
+        break;
+    }
+  },
+
+  startNewSession(items, hasUnexported) {
+    if (items.length === 0) {
+      // No existing items, nothing to clear
+      this.showSuccess('Starting new feedback session.');
+      return;
+    }
+
+    if (hasUnexported) {
+      // Export first, then clear
+      try {
+        const markdown = FeedbackExport.generateMarkdown(items);
+        FeedbackExport.downloadMarkdown(markdown);
+        FeedbackStorage.markAsExported();
+        
+        // Clear after export
         FeedbackStorage.clearAllFeedback();
-        console.log('Previous feedback session cleared');
+        FeedbackUI.updateFeedbackCounter();
+        
+        this.showSuccess('Previous feedback exported and cleared. Starting new session.');
+      } catch (error) {
+        this.showError('Failed to export feedback: ' + error.message);
+        console.error('Export failed during session gap handling:', error);
+        return;
       }
+    } else {
+      // All exported, just clear
+      FeedbackStorage.clearAllFeedback();
+      FeedbackUI.updateFeedbackCounter();
+      this.showSuccess('Previous session cleared. Starting new session.');
+    }
+  },
+
+  continueExistingSession() {
+    this.showSuccess('Continuing with existing feedback session.');
+  },
+
+  checkSessionGapOnAdd() {
+    // Check for session gap when adding new feedback (not just on init)
+    if (FeedbackStorage.shouldPromptNewSession()) {
+      this.handleSessionGapPrompt();
     }
   },
 
 
   setupUnloadWarning() {
     window.addEventListener('beforeunload', (e) => {
-      const count = FeedbackStorage.getFeedbackCount();
-      if (count > 0) {
-        const message = `You have ${count} unsaved feedback item(s). Consider exporting them before leaving.`;
+      const hasUnexported = FeedbackStorage.hasUnexportedFeedback();
+      if (hasUnexported) {
+        const count = FeedbackStorage.getUnexportedCount();
+        const message = `You have ${count} unexported feedback item(s). Consider exporting them before leaving.`;
         e.preventDefault();
         e.returnValue = message;
         return message;
@@ -2545,10 +3219,12 @@ if (typeof module !== 'undefined' && module.exports) {
       if (format === 'markdown') {
         const markdown = FeedbackExport.generateMarkdown(items);
         FeedbackExport.downloadMarkdown(markdown);
+        FeedbackStorage.markAsExported(); // Mark items as exported
         this.emit('feedbackWidget:feedbackExported', { format, itemCount: items.length });
         return true;
       } else if (format === 'json') {
         this.exportAsJSON(items);
+        FeedbackStorage.markAsExported(); // Mark items as exported
         this.emit('feedbackWidget:feedbackExported', { format, itemCount: items.length });
         return true;
       } else {
@@ -2672,6 +3348,108 @@ if (typeof module !== 'undefined' && module.exports) {
       lastActivity: FeedbackStorage.getLastActivity(),
       shouldPromptNewSession: FeedbackStorage.shouldPromptNewSession()
     };
+  },
+
+  // Test helper method - adds sample feedback from yesterday
+  addTestData() {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(10, 30, 0, 0); // 10:30 AM yesterday
+    
+    const testFeedback = [
+      {
+        id: 'test_' + Date.now() + '_1',
+        type: 'bug-report',
+        message: 'The login button is not working properly on mobile devices',
+        priority: 'high',
+        context: {
+          url: window.location.href,
+          pageTitle: document.title,
+          userAgent: navigator.userAgent,
+          timestamp: yesterday.toISOString(),
+          selectedElement: {
+            selector: 'button.login-btn',
+            text: 'Login',
+            tagName: 'BUTTON'
+          }
+        }
+      },
+      {
+        id: 'test_' + Date.now() + '_2',
+        type: 'text-change',
+        message: 'Change "Sign Up" to "Create Account" for clarity',
+        priority: 'medium',
+        context: {
+          url: window.location.href,
+          pageTitle: document.title,
+          userAgent: navigator.userAgent,
+          timestamp: new Date(yesterday.getTime() + 60000).toISOString(), // 1 minute later
+          selectedElement: {
+            selector: 'a.signup-link',
+            text: 'Sign Up',
+            tagName: 'A'
+          }
+        }
+      },
+      {
+        id: 'test_' + Date.now() + '_3',
+        type: 'feature-request',
+        message: 'Add dark mode toggle to the settings page',
+        priority: 'low',
+        context: {
+          url: window.location.href,
+          pageTitle: document.title,
+          userAgent: navigator.userAgent,
+          timestamp: new Date(yesterday.getTime() + 120000).toISOString(), // 2 minutes later
+          selectedElement: null
+        }
+      }
+    ];
+
+    try {
+      const existingItems = FeedbackStorage.getFeedbackItems();
+      const allItems = [...existingItems, ...testFeedback];
+      FeedbackStorage.saveFeedbackItems(allItems);
+      
+      FeedbackUI.updateFeedbackCounter();
+      if (FeedbackUI.isAdminPanelOpen) {
+        FeedbackUI.refreshAdminPanel();
+      }
+      
+      this.showSuccess(`Added ${testFeedback.length} test feedback items from yesterday`);
+      
+      console.log('Test data added:', {
+        items: testFeedback,
+        shouldPromptNewSession: FeedbackStorage.shouldPromptNewSession(),
+        lastActivity: FeedbackStorage.getLastActivity(),
+        hoursSinceLastActivity: (Date.now() - FeedbackStorage.getLastActivity().getTime()) / (1000 * 60 * 60)
+      });
+      
+      return testFeedback;
+    } catch (error) {
+      this.showError('Failed to add test data: ' + error.message);
+      console.error('Test data error:', error);
+      return false;
+    }
+  },
+
+  // Clear test data
+  clearTestData() {
+    try {
+      const items = FeedbackStorage.getFeedbackItems();
+      const nonTestItems = items.filter(item => !item.id.startsWith('test_'));
+      
+      FeedbackStorage.saveFeedbackItems(nonTestItems);
+      FeedbackUI.updateFeedbackCounter();
+      
+      const removedCount = items.length - nonTestItems.length;
+      this.showSuccess(`Removed ${removedCount} test items`);
+      
+      return true;
+    } catch (error) {
+      this.showError('Failed to clear test data: ' + error.message);
+      return false;
+    }
   },
 
   // Version information

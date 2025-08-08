@@ -1,5 +1,6 @@
 const FeedbackStorage = {
   STORAGE_KEY: 'feedback_widget_data',
+  EXPORT_STATUS_KEY: 'feedback_widget_export_status',
   MAX_STORAGE_SIZE: 4.5 * 1024 * 1024, // 4.5MB to leave room for other data
   
   isStorageAvailable() {
@@ -114,6 +115,7 @@ const FeedbackStorage = {
     if (!this.isStorageAvailable()) return false;
     try {
       localStorage.removeItem(this.STORAGE_KEY);
+      this.clearExportStatus(); // Also clear export tracking
       return true;
     } catch (e) {
       console.warn('Failed to clear feedback data:', e);
@@ -138,16 +140,84 @@ const FeedbackStorage = {
     if (!lastActivity) return false;
     
     const hoursSinceActivity = (Date.now() - lastActivity.getTime()) / (1000 * 60 * 60);
-    return hoursSinceActivity >= 24;
+    return hoursSinceActivity >= 12;
+  },
+
+  getExportStatus() {
+    if (!this.isStorageAvailable()) return { lastExportTimestamp: null, exportedItemIds: [] };
+    try {
+      const data = localStorage.getItem(this.EXPORT_STATUS_KEY);
+      return data ? JSON.parse(data) : { lastExportTimestamp: null, exportedItemIds: [] };
+    } catch (e) {
+      console.warn('Failed to parse export status from localStorage:', e);
+      return { lastExportTimestamp: null, exportedItemIds: [] };
+    }
+  },
+
+  saveExportStatus(exportStatus) {
+    if (!this.isStorageAvailable()) return false;
+    try {
+      localStorage.setItem(this.EXPORT_STATUS_KEY, JSON.stringify(exportStatus));
+      return true;
+    } catch (e) {
+      console.warn('Failed to save export status:', e);
+      return false;
+    }
+  },
+
+  markAsExported(itemIds = null) {
+    const items = this.getFeedbackItems();
+    const exportStatus = this.getExportStatus();
+    
+    // If no specific items provided, mark all current items as exported
+    const idsToMark = itemIds || items.map(item => item.id);
+    
+    // Update export status
+    exportStatus.lastExportTimestamp = Date.now();
+    exportStatus.exportedItemIds = [...new Set([...exportStatus.exportedItemIds, ...idsToMark])];
+    
+    return this.saveExportStatus(exportStatus);
+  },
+
+  hasUnexportedFeedback() {
+    const items = this.getFeedbackItems();
+    if (items.length === 0) return false;
+    
+    const exportStatus = this.getExportStatus();
+    return items.some(item => !exportStatus.exportedItemIds.includes(item.id));
+  },
+
+  getUnexportedItems() {
+    const items = this.getFeedbackItems();
+    const exportStatus = this.getExportStatus();
+    return items.filter(item => !exportStatus.exportedItemIds.includes(item.id));
+  },
+
+  getUnexportedCount() {
+    return this.getUnexportedItems().length;
+  },
+
+  clearExportStatus() {
+    if (!this.isStorageAvailable()) return false;
+    try {
+      localStorage.removeItem(this.EXPORT_STATUS_KEY);
+      return true;
+    } catch (e) {
+      console.warn('Failed to clear export status:', e);
+      return false;
+    }
   },
 
   getStorageInfo() {
+    const exportStatus = this.getExportStatus();
     return {
       available: this.isStorageAvailable(),
       currentSize: this.getCurrentStorageSize(),
       totalSize: this.getTotalStorageSize(),
       maxSize: this.MAX_STORAGE_SIZE,
-      itemCount: this.getFeedbackCount()
+      itemCount: this.getFeedbackCount(),
+      unexportedCount: this.getUnexportedCount(),
+      lastExportTimestamp: exportStatus.lastExportTimestamp
     };
   }
 };

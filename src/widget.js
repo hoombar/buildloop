@@ -2,7 +2,7 @@ const FeedbackWidget = {
   config: {
     autoInit: true,
     showFloatingButton: true,
-    sessionGapHours: 24
+    sessionGapHours: 12
   },
   
   isInitialized: false,
@@ -17,9 +17,6 @@ const FeedbackWidget = {
     this.config = { ...this.config, ...customConfig };
     
     try {
-      // Check for session gap and prompt if needed
-      this.checkSessionGap();
-      
       // Initialize UI
       FeedbackUI.init();
       
@@ -41,24 +38,87 @@ const FeedbackWidget = {
 
   checkSessionGap() {
     if (FeedbackStorage.shouldPromptNewSession()) {
-      const shouldClear = confirm(
-        'Start new feedback session? Previous session will be cleared.\n\n' +
-        'Click OK to clear old feedback, or Cancel to continue with existing feedback.'
-      );
-      
-      if (shouldClear) {
+      this.handleSessionGapPrompt();
+    }
+  },
+
+  handleSessionGapPrompt(onComplete) {
+    FeedbackUI.showSessionGapModal((decision) => {
+      this.handleSessionGapDecision(decision, onComplete);
+    });
+  },
+
+  handleSessionGapDecision(decision, onComplete) {
+    const items = FeedbackStorage.getFeedbackItems();
+    const hasUnexported = FeedbackStorage.hasUnexportedFeedback();
+    
+    switch (decision) {
+      case 'new':
+        this.startNewSession(items, hasUnexported);
+        // After clearing/exporting, continue with the original action
+        if (onComplete) onComplete();
+        break;
+      case 'continue':
+        this.continueExistingSession();
+        // Continue with the original action (element selection)
+        if (onComplete) onComplete();
+        break;
+      case 'cancel':
+        // User canceled, don't call onComplete
+        break;
+    }
+  },
+
+  startNewSession(items, hasUnexported) {
+    if (items.length === 0) {
+      // No existing items, nothing to clear
+      this.showSuccess('Starting new feedback session.');
+      return;
+    }
+
+    if (hasUnexported) {
+      // Export first, then clear
+      try {
+        const markdown = FeedbackExport.generateMarkdown(items);
+        FeedbackExport.downloadMarkdown(markdown);
+        FeedbackStorage.markAsExported();
+        
+        // Clear after export
         FeedbackStorage.clearAllFeedback();
-        console.log('Previous feedback session cleared');
+        FeedbackUI.updateFeedbackCounter();
+        
+        this.showSuccess('Previous feedback exported and cleared. Starting new session.');
+      } catch (error) {
+        this.showError('Failed to export feedback: ' + error.message);
+        console.error('Export failed during session gap handling:', error);
+        return;
       }
+    } else {
+      // All exported, just clear
+      FeedbackStorage.clearAllFeedback();
+      FeedbackUI.updateFeedbackCounter();
+      this.showSuccess('Previous session cleared. Starting new session.');
+    }
+  },
+
+  continueExistingSession() {
+    this.showSuccess('Continuing with existing feedback session.');
+  },
+
+  checkSessionGapOnAdd() {
+    // Check for session gap when adding new feedback (not just on init)
+    if (FeedbackStorage.shouldPromptNewSession()) {
+      this.handleSessionGapPrompt();
     }
   },
 
 
   setupUnloadWarning() {
     window.addEventListener('beforeunload', (e) => {
-      const count = FeedbackStorage.getFeedbackCount();
-      if (count > 0) {
-        const message = `You have ${count} unsaved feedback item(s). Consider exporting them before leaving.`;
+      const hasUnexported = FeedbackStorage.hasUnexportedFeedback();
+      if (hasUnexported) {
+        const count = FeedbackStorage.getUnexportedCount();
+        const message = `You have ${count} unexported feedback item(s). Consider exporting them before leaving.`;
         e.preventDefault();
         e.returnValue = message;
         return message;
@@ -165,10 +225,12 @@ const FeedbackWidget = {
       if (format === 'markdown') {
         const markdown = FeedbackExport.generateMarkdown(items);
         FeedbackExport.downloadMarkdown(markdown);
+        FeedbackStorage.markAsExported(); // Mark items as exported
         this.emit('feedbackWidget:feedbackExported', { format, itemCount: items.length });
         return true;
       } else if (format === 'json') {
         this.exportAsJSON(items);
+        FeedbackStorage.markAsExported(); // Mark items as exported
         this.emit('feedbackWidget:feedbackExported', { format, itemCount: items.length });
         return true;
       } else {
@@ -292,6 +354,108 @@ const FeedbackWidget = {
       lastActivity: FeedbackStorage.getLastActivity(),
       shouldPromptNewSession: FeedbackStorage.shouldPromptNewSession()
     };
+  },
+
+  // Test helper method - adds sample feedback from yesterday
+  addTestData() {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(10, 30, 0, 0); // 10:30 AM yesterday
+    
+    const testFeedback = [
+      {
+        id: 'test_' + Date.now() + '_1',
+        type: 'bug-report',
+        message: 'The login button is not working properly on mobile devices',
+        priority: 'high',
+        context: {
+          url: window.location.href,
+          pageTitle: document.title,
+          userAgent: navigator.userAgent,
+          timestamp: yesterday.toISOString(),
+          selectedElement: {
+            selector: 'button.login-btn',
+            text: 'Login',
+            tagName: 'BUTTON'
+          }
+        }
+      },
+      {
+        id: 'test_' + Date.now() + '_2',
+        type: 'text-change',
+        message: 'Change "Sign Up" to "Create Account" for clarity',
+        priority: 'medium',
+        context: {
+          url: window.location.href,
+          pageTitle: document.title,
+          userAgent: navigator.userAgent,
+          timestamp: new Date(yesterday.getTime() + 60000).toISOString(), // 1 minute later
+          selectedElement: {
+            selector: 'a.signup-link',
+            text: 'Sign Up',
+            tagName: 'A'
+          }
+        }
+      },
+      {
+        id: 'test_' + Date.now() + '_3',
+        type: 'feature-request',
+        message: 'Add dark mode toggle to the settings page',
+        priority: 'low',
+        context: {
+          url: window.location.href,
+          pageTitle: document.title,
+          userAgent: navigator.userAgent,
+          timestamp: new Date(yesterday.getTime() + 120000).toISOString(), // 2 minutes later
+          selectedElement: null
+        }
+      }
+    ];
+
+    try {
+      const existingItems = FeedbackStorage.getFeedbackItems();
+      const allItems = [...existingItems, ...testFeedback];
+      FeedbackStorage.saveFeedbackItems(allItems);
+      
+      FeedbackUI.updateFeedbackCounter();
+      if (FeedbackUI.isAdminPanelOpen) {
+        FeedbackUI.refreshAdminPanel();
+      }
+      
+      this.showSuccess(`Added ${testFeedback.length} test feedback items from yesterday`);
+      
+      console.log('Test data added:', {
+        items: testFeedback,
+        shouldPromptNewSession: FeedbackStorage.shouldPromptNewSession(),
+        lastActivity: FeedbackStorage.getLastActivity(),
+        hoursSinceLastActivity: (Date.now() - FeedbackStorage.getLastActivity().getTime()) / (1000 * 60 * 60)
+      });
+      
+      return testFeedback;
+    } catch (error) {
+      this.showError('Failed to add test data: ' + error.message);
+      console.error('Test data error:', error);
+      return false;
+    }
+  },
+
+  // Clear test data
+  clearTestData() {
+    try {
+      const items = FeedbackStorage.getFeedbackItems();
+      const nonTestItems = items.filter(item => !item.id.startsWith('test_'));
+      
+      FeedbackStorage.saveFeedbackItems(nonTestItems);
+      FeedbackUI.updateFeedbackCounter();
+      
+      const removedCount = items.length - nonTestItems.length;
+      this.showSuccess(`Removed ${removedCount} test items`);
+      
+      return true;
+    } catch (error) {
+      this.showError('Failed to clear test data: ' + error.message);
+      return false;
+    }
   },
 
   // Version information
