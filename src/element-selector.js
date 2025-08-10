@@ -4,6 +4,7 @@ const ElementSelector = {
   statusBox: null,
   onElementSelected: null,
   originalCursor: null,
+  originalBodyPadding: null,
   lastMousePosition: { x: 0, y: 0 },
   positionUpdateTimeout: null,
   
@@ -13,9 +14,13 @@ const ElementSelector = {
     this.isActive = true;
     this.onElementSelected = onElementSelectedCallback;
     this.originalCursor = document.body.style.cursor;
+    this.originalBodyPadding = document.body.style.paddingBottom || '';
     
     // Change cursor to crosshair
     document.body.style.cursor = 'crosshair';
+    
+    // Push content up by adding padding to body (matches box height)
+    document.body.style.paddingBottom = '16vh';
     
     // Create status box
     this.createStatusBox();
@@ -41,6 +46,9 @@ const ElementSelector = {
     
     // Restore cursor
     document.body.style.cursor = this.originalCursor || '';
+    
+    // Restore body padding
+    document.body.style.paddingBottom = this.originalBodyPadding || '';
     
     // Remove status box
     this.removeStatusBox();
@@ -68,24 +76,26 @@ const ElementSelector = {
     this.statusBox.className = 'feedback-widget-status-box';
     this.statusBox.style.cssText = `
       position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
       width: 100%;
-      max-width: 600px;
+      height: 16vh;
       background: white;
       border: 2px solid #007bff;
-      border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
-      padding: 12px 16px;
+      border-radius: 8px 8px 0 0;
+      box-shadow: 0 -4px 12px rgba(0, 123, 255, 0.3);
+      padding: 12px 20px 16px 20px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 14px;
+      font-size: 13px;
+      line-height: 1.3;
       z-index: 999999;
       pointer-events: none;
       opacity: 0.95;
       box-sizing: border-box;
-      transition: all 0.3s ease;
+      overflow-y: auto;
     `;
     
-    // Set initial position
-    this.positionStatusBox({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
     this.statusBox.innerHTML = `
       <div style="font-weight: 600; color: #007bff; margin-bottom: 4px;">
         🎯 Element Selection Mode - Hover over elements to preview
@@ -149,15 +159,16 @@ const ElementSelector = {
           contextParts.push(`<span style="color: #6c757d; font-style: italic;">In: ${this.escapeHtml(context.parentContext)}</span>`);
         }
         
-        // Add DOM path for element location
+        // Add DOM path for element location (truncated)
         if (context.domPath) {
-          contextParts.push(`<span style="color: #28a745; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(context.domPath)}</span>`);
+          const truncatedPath = this.truncateDomPath(context.domPath, 70);
+          contextParts.push(`<span style="color: #28a745; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(truncatedPath)}</span>`);
         }
         
         if (contextParts.length > 0) {
           contextHtml = `
-            <div style="margin-bottom: 6px; padding: 4px; background: #f8f9fa; border-radius: 3px; font-size: 11px; line-height: 1.4;">
-              <div style="color: #666; margin-bottom: 2px;"><strong>Context:</strong></div>
+            <div style="margin-bottom: 4px; padding: 3px 6px; background: #f8f9fa; border-radius: 3px; font-size: 11px; line-height: 1.3;">
+              <div style="color: #666; margin-bottom: 1px; font-weight: 600;">Context:</div>
               <div style="font-family: monospace;">
                 ${contextParts.join('<br>')}
               </div>
@@ -168,7 +179,7 @@ const ElementSelector = {
       
       statusContent.innerHTML = `
         ${contextHtml}
-        <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
+        <div style="margin-top: 2px;"><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(this.truncateText(elementInfo.text, 120)) + '"' : '(no text content)'}</div>
       `;
     }
     
@@ -185,98 +196,8 @@ const ElementSelector = {
   },
 
   positionStatusBox(mousePos) {
-    if (!this.statusBox) return;
-    
-    const boxRect = this.statusBox.getBoundingClientRect();
-    const boxWidth = Math.min(600, window.innerWidth - 40); // Account for margins
-    const boxHeight = boxRect.height || 120; // Estimate if not rendered yet
-    
-    const margin = 20;
-    const cursorBuffer = 100; // Keep box at least 100px away from cursor
-    
-    // Calculate available areas
-    const areas = [
-      // Bottom center (preferred)
-      {
-        x: Math.max(margin, Math.min(window.innerWidth - boxWidth - margin, (window.innerWidth - boxWidth) / 2)),
-        y: window.innerHeight - boxHeight - margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          (window.innerWidth - boxWidth) / 2, 
-          window.innerHeight - boxHeight - margin, 
-          boxWidth, boxHeight),
-        position: 'bottom'
-      },
-      // Top center
-      {
-        x: Math.max(margin, Math.min(window.innerWidth - boxWidth - margin, (window.innerWidth - boxWidth) / 2)),
-        y: margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          (window.innerWidth - boxWidth) / 2, 
-          margin, 
-          boxWidth, boxHeight),
-        position: 'top'
-      },
-      // Bottom left
-      {
-        x: margin,
-        y: window.innerHeight - boxHeight - margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          margin, 
-          window.innerHeight - boxHeight - margin, 
-          boxWidth, boxHeight),
-        position: 'bottom-left'
-      },
-      // Bottom right
-      {
-        x: window.innerWidth - boxWidth - margin,
-        y: window.innerHeight - boxHeight - margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          window.innerWidth - boxWidth - margin, 
-          window.innerHeight - boxHeight - margin, 
-          boxWidth, boxHeight),
-        position: 'bottom-right'
-      },
-      // Top left
-      {
-        x: margin,
-        y: margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          margin, 
-          margin, 
-          boxWidth, boxHeight),
-        position: 'top-left'
-      },
-      // Top right
-      {
-        x: window.innerWidth - boxWidth - margin,
-        y: margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          window.innerWidth - boxWidth - margin, 
-          margin, 
-          boxWidth, boxHeight),
-        position: 'top-right'
-      }
-    ];
-    
-    // Sort by distance from cursor (furthest first) and prefer bottom positions
-    areas.sort((a, b) => {
-      // Prefer bottom positions when distances are similar
-      if (Math.abs(a.priority - b.priority) < cursorBuffer) {
-        if (a.position.includes('bottom') && !b.position.includes('bottom')) return -1;
-        if (!a.position.includes('bottom') && b.position.includes('bottom')) return 1;
-      }
-      return b.priority - a.priority;
-    });
-    
-    // Use the best position that keeps the box far enough from cursor
-    const bestPosition = areas.find(area => area.priority >= cursorBuffer) || areas[0];
-    
-    // Apply the position
-    this.statusBox.style.left = `${bestPosition.x}px`;
-    this.statusBox.style.top = `${bestPosition.y}px`;
-    this.statusBox.style.right = 'auto';
-    this.statusBox.style.bottom = 'auto';
-    this.statusBox.style.width = `${boxWidth}px`;
+    // Status box is now fixed to bottom of screen - no positioning needed
+    return;
   },
 
   getDistanceFromCursor(mousePos, boxX, boxY, boxWidth, boxHeight) {
@@ -302,6 +223,29 @@ const ElementSelector = {
     return div.innerHTML;
   },
 
+  truncateText(text, maxLength = 100) {
+    if (!text || text.length <= maxLength) return text;
+    return text.substring(0, maxLength) + '...';
+  },
+
+  truncateDomPath(domPath, maxLength = 80) {
+    if (!domPath || domPath.length <= maxLength) return domPath;
+    // Try to keep the most specific part (end) of the path
+    const parts = domPath.split(' > ');
+    if (parts.length > 1) {
+      let result = parts[parts.length - 1]; // Start with the most specific
+      for (let i = parts.length - 2; i >= 0; i--) {
+        const candidate = parts[i] + ' > ' + result;
+        if (candidate.length > maxLength) {
+          return '...' + result;
+        }
+        result = candidate;
+      }
+      return result;
+    }
+    return domPath.substring(0, maxLength) + '...';
+  },
+
   handleMouseOver: function(e) {
     if (!ElementSelector.isActive) return;
     
@@ -324,14 +268,7 @@ const ElementSelector = {
     
     ElementSelector.lastMousePosition = { x: e.clientX, y: e.clientY };
     
-    // Throttle position updates to avoid excessive calculations
-    if (ElementSelector.positionUpdateTimeout) {
-      clearTimeout(ElementSelector.positionUpdateTimeout);
-    }
-    
-    ElementSelector.positionUpdateTimeout = setTimeout(() => {
-      ElementSelector.positionStatusBox(ElementSelector.lastMousePosition);
-    }, 50); // Update every 50ms when moving
+    // Status box is now fixed - no positioning updates needed
   }.bind(this),
 
   handleClick: function(e) {
@@ -420,15 +357,16 @@ const ElementSelector = {
           contextParts.push(`<span style="color: #6c757d; font-style: italic;">In: ${this.escapeHtml(context.parentContext)}</span>`);
         }
         
-        // Add DOM path for element location
+        // Add DOM path for element location (truncated)
         if (context.domPath) {
-          contextParts.push(`<span style="color: #155724; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(context.domPath)}</span>`);
+          const truncatedPath = this.truncateDomPath(context.domPath, 70);
+          contextParts.push(`<span style="color: #155724; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(truncatedPath)}</span>`);
         }
         
         if (contextParts.length > 0) {
           contextHtml = `
-            <div style="margin-bottom: 6px; padding: 4px; background: #d4edda; border-radius: 3px; font-size: 11px; line-height: 1.4;">
-              <div style="color: #155724; margin-bottom: 2px;"><strong>Selected Context:</strong></div>
+            <div style="margin-bottom: 4px; padding: 3px 6px; background: #d4edda; border-radius: 3px; font-size: 11px; line-height: 1.3;">
+              <div style="color: #155724; margin-bottom: 1px; font-weight: 600;">Selected Context:</div>
               <div style="font-family: monospace;">
                 ${contextParts.join('<br>')}
               </div>
@@ -438,9 +376,9 @@ const ElementSelector = {
       }
       
       statusContent.innerHTML = `
-        <div style="color: #28a745; font-weight: 600; margin-bottom: 4px;">✅ Element Selected!</div>
+        <div style="color: #28a745; font-weight: 600; margin-bottom: 2px;">✅ Element Selected!</div>
         ${contextHtml}
-        <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
+        <div style="margin-top: 2px;"><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(this.truncateText(elementInfo.text, 120)) + '"' : '(no text content)'}</div>
       `;
     }
     

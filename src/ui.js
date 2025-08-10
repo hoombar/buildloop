@@ -1410,6 +1410,43 @@ const FeedbackUI = {
           font-size: 15px;
         }
       }
+      
+      /* Element Selector Status Box - Fixed to bottom of screen */
+      .feedback-widget-status-box {
+        /* Fixed positioning at bottom of viewport */
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        
+        /* Larger size for better content display (16vh = ~1/6th of screen) */
+        width: 100% !important;
+        height: 16vh !important;
+        
+        /* Visual styling */
+        background: white !important;
+        border: 2px solid #007bff !important;
+        border-radius: 8px 8px 0 0 !important; /* Only top corners rounded */
+        box-shadow: 0 -4px 12px rgba(0, 123, 255, 0.3) !important; /* Shadow points upward */
+        
+        /* Content styling - Optimized for 6 lines within 12.5vh */
+        padding: 12px 20px 16px 20px !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+        font-size: 13px !important;
+        line-height: 1.3 !important; /* Compact line spacing for more content */
+        
+        /* Layer and interaction */
+        z-index: 999999 !important; /* Above all other elements */
+        pointer-events: none !important; /* Don't interfere with element selection */
+        opacity: 0.95 !important;
+        box-sizing: border-box !important;
+        
+        /* Scrolling for overflow content */
+        overflow-y: auto !important;
+        
+        /* No transitions to prevent movement when cursor intersects */
+        transition: none !important;
+      }
     `;
     
     document.head.appendChild(style);
