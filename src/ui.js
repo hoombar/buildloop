@@ -2,6 +2,7 @@ const FeedbackUI = {
   container: null,
   modal: null,
   sessionGapModal: null,
+  feedbackPopup: null,
   floatingButton: null,
   adminPanel: null,
   floatingMenu: null,
@@ -154,6 +155,10 @@ const FeedbackUI = {
         <span class="feedback-menu-badge" style="${unexportedCount > 0 ? 'background: #dc3545;' : (count > 0 ? 'background: #28a745;' : '')}">${count}</span>
       </div>
       ${count > 0 ? `
+      <div class="feedback-menu-item" data-action="view">
+        <span class="feedback-menu-icon">👁️</span>
+        <span class="feedback-menu-text">View Feedback</span>
+      </div>
       <div class="feedback-menu-item" data-action="export">
         <span class="feedback-menu-icon">📥</span>
         <span class="feedback-menu-text">Export Feedback</span>
@@ -186,6 +191,9 @@ const FeedbackUI = {
         break;
       case 'admin':
         this.showAdminPanel();
+        break;
+      case 'view':
+        this.showFeedbackPopup();
         break;
       case 'export':
         this.handleExport();
@@ -375,6 +383,145 @@ const FeedbackUI = {
     if (this.sessionGapModal) {
       this.sessionGapModal.remove();
       this.sessionGapModal = null;
+    }
+  },
+
+  showFeedbackPopup() {
+    if (this.feedbackPopup) {
+      this.closeFeedbackPopup();
+    }
+
+    const items = FeedbackStorage.getFeedbackItems();
+    if (items.length === 0) {
+      this.showError('No feedback items to display');
+      return;
+    }
+
+    this.feedbackPopup = this.createFeedbackPopup(items);
+    this.container.appendChild(this.feedbackPopup);
+
+    // Focus the copy button
+    setTimeout(() => {
+      const copyBtn = this.feedbackPopup.querySelector('.feedback-popup-copy-btn');
+      if (copyBtn) copyBtn.focus();
+    }, 100);
+  },
+
+  createFeedbackPopup(items) {
+    const popup = document.createElement('div');
+    popup.className = 'feedback-widget-modal-overlay feedback-popup-overlay';
+
+    const markdown = FeedbackExport.generateMarkdown(items);
+    const previewText = this.escapeHtml(markdown);
+
+    popup.innerHTML = `
+      <div class="feedback-widget-modal feedback-popup-modal">
+        <div class="feedback-widget-header">
+          <h3>Feedback (${items.length} items)</h3>
+          <button class="feedback-widget-close-btn feedback-popup-close" type="button">&times;</button>
+        </div>
+
+        <div class="feedback-popup-content">
+          <div class="feedback-popup-actions">
+            <button type="button" class="feedback-popup-copy-btn">
+              <span class="copy-icon">📋</span>
+              Copy to Clipboard
+            </button>
+            <button type="button" class="feedback-popup-export-btn">
+              <span class="export-icon">📥</span>
+              Download File
+            </button>
+          </div>
+
+          <div class="feedback-popup-preview">
+            <pre class="feedback-popup-text">${previewText}</pre>
+          </div>
+        </div>
+      </div>
+    `;
+
+    this.bindFeedbackPopupEvents(popup, markdown);
+    return popup;
+  },
+
+  bindFeedbackPopupEvents(popup, markdown) {
+    const closeBtn = popup.querySelector('.feedback-popup-close');
+    const copyBtn = popup.querySelector('.feedback-popup-copy-btn');
+    const exportBtn = popup.querySelector('.feedback-popup-export-btn');
+
+    // Close popup events
+    closeBtn.addEventListener('click', () => this.closeFeedbackPopup());
+    popup.addEventListener('click', (e) => {
+      if (e.target === popup) this.closeFeedbackPopup();
+    });
+
+    // Copy to clipboard
+    copyBtn.addEventListener('click', () => {
+      this.copyToClipboard(markdown, copyBtn);
+    });
+
+    // Export file
+    exportBtn.addEventListener('click', () => {
+      this.handleExport();
+      this.closeFeedbackPopup();
+    });
+
+    // Escape key to close
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        this.closeFeedbackPopup();
+        document.removeEventListener('keydown', handleKeyDown);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+  },
+
+  async copyToClipboard(text, button) {
+    try {
+      // Try modern clipboard API first
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        this.showCopySuccess(button);
+        return;
+      }
+
+      // Fallback to older method
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+
+      this.showCopySuccess(button);
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      this.showError('Failed to copy to clipboard. Please try manual selection.');
+    }
+  },
+
+  showCopySuccess(button) {
+    const originalText = button.innerHTML;
+    button.innerHTML = '<span class="copy-icon">✅</span> Copied!';
+    button.style.background = '#28a745';
+
+    setTimeout(() => {
+      button.innerHTML = originalText;
+      button.style.background = '';
+    }, 2000);
+
+    this.showSuccess('Feedback copied to clipboard!');
+  },
+
+  closeFeedbackPopup() {
+    if (this.feedbackPopup) {
+      this.feedbackPopup.remove();
+      this.feedbackPopup = null;
     }
   },
 
@@ -637,6 +784,7 @@ const FeedbackUI = {
       </div>
       
       <div class="feedback-widget-admin-actions">
+        <button class="feedback-widget-view-btn" ${items.length === 0 ? 'disabled' : ''}>View All</button>
         <button class="feedback-widget-export-btn" ${items.length === 0 ? 'disabled' : ''}>
           Export All ${unexportedCount > 0 ? `(${unexportedCount} new)` : ''}
         </button>
@@ -695,11 +843,13 @@ const FeedbackUI = {
 
   bindAdminEvents(panel) {
     const closeBtn = panel.querySelector('.feedback-widget-admin-close-btn');
+    const viewBtn = panel.querySelector('.feedback-widget-view-btn');
     const exportBtn = panel.querySelector('.feedback-widget-export-btn');
     const clearBtn = panel.querySelector('.feedback-widget-clear-btn');
     const deleteButtons = panel.querySelectorAll('.feedback-widget-delete-item-btn');
-    
+
     closeBtn.addEventListener('click', () => this.closeAdminPanel());
+    viewBtn.addEventListener('click', () => this.showFeedbackPopup());
     exportBtn.addEventListener('click', () => this.handleExport());
     clearBtn.addEventListener('click', () => this.handleClearAll());
     
@@ -1115,12 +1265,18 @@ const FeedbackUI = {
         cursor: not-allowed;
       }
       
+      .feedback-widget-view-btn {
+        background: #6c757d !important;
+        color: white !important;
+        border-color: #6c757d !important;
+      }
+
       .feedback-widget-export-btn {
         background: #007bff !important;
         color: white !important;
         border-color: #007bff !important;
       }
-      
+
       .feedback-widget-clear-btn {
         background: #dc3545 !important;
         color: white !important;
@@ -1411,6 +1567,121 @@ const FeedbackUI = {
         }
       }
       
+      /* Feedback Popup Styles */
+      .feedback-popup-modal {
+        max-width: 700px;
+        max-height: 80vh;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .feedback-popup-content {
+        padding: 0;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .feedback-popup-actions {
+        padding: 20px 20px 16px;
+        border-bottom: 1px solid #eee;
+        display: flex;
+        gap: 12px;
+        flex-shrink: 0;
+      }
+
+      .feedback-popup-copy-btn,
+      .feedback-popup-export-btn {
+        padding: 10px 16px;
+        border: 1px solid #ddd;
+        background: white;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition: all 0.2s ease;
+      }
+
+      .feedback-popup-copy-btn:hover,
+      .feedback-popup-export-btn:hover {
+        background: #f8f9fa;
+        border-color: #007bff;
+      }
+
+      .feedback-popup-copy-btn {
+        background: #007bff;
+        color: white;
+        border-color: #007bff;
+      }
+
+      .feedback-popup-copy-btn:hover {
+        background: #0056b3;
+        color: white;
+      }
+
+      .feedback-popup-export-btn .export-icon,
+      .feedback-popup-copy-btn .copy-icon {
+        font-size: 16px;
+      }
+
+      .feedback-popup-preview {
+        flex: 1;
+        overflow: hidden;
+        padding: 0 20px 20px;
+      }
+
+      .feedback-popup-text {
+        width: 100%;
+        height: 100%;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 16px;
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        background: #f8f9fa;
+        color: #333;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        margin: 0;
+        box-sizing: border-box;
+        resize: none;
+      }
+
+      .feedback-popup-text:focus {
+        outline: 2px solid #007bff;
+        outline-offset: -1px;
+      }
+
+      /* Mobile responsiveness for popup */
+      @media (max-width: 768px) {
+        .feedback-popup-modal {
+          max-width: calc(100vw - 20px);
+          margin: 10px;
+          max-height: 85vh;
+        }
+
+        .feedback-popup-actions {
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .feedback-popup-copy-btn,
+        .feedback-popup-export-btn {
+          justify-content: center;
+        }
+
+        .feedback-popup-text {
+          font-size: 12px;
+        }
+      }
+
       /* Element Selector Status Box - Fixed to bottom of screen */
       .feedback-widget-status-box {
         /* Fixed positioning at bottom of viewport */
@@ -1466,6 +1737,7 @@ const FeedbackUI = {
     ElementSelector.deactivate();
     this.closeFloatingMenu();
     this.closeSessionGapModal();
+    this.closeFeedbackPopup();
     this.isInitialized = false;
     this.isAdminPanelOpen = false;
     this.isContextMenuOpen = false;
