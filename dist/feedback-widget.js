@@ -630,6 +630,7 @@ if (typeof module !== 'undefined' && module.exports) {
   statusBox: null,
   onElementSelected: null,
   originalCursor: null,
+  originalBodyPadding: null,
   lastMousePosition: { x: 0, y: 0 },
   positionUpdateTimeout: null,
   
@@ -639,9 +640,13 @@ if (typeof module !== 'undefined' && module.exports) {
     this.isActive = true;
     this.onElementSelected = onElementSelectedCallback;
     this.originalCursor = document.body.style.cursor;
+    this.originalBodyPadding = document.body.style.paddingBottom || '';
     
     // Change cursor to crosshair
     document.body.style.cursor = 'crosshair';
+    
+    // Push content up by adding padding to body (matches box height)
+    document.body.style.paddingBottom = '16vh';
     
     // Create status box
     this.createStatusBox();
@@ -667,6 +672,9 @@ if (typeof module !== 'undefined' && module.exports) {
     
     // Restore cursor
     document.body.style.cursor = this.originalCursor || '';
+    
+    // Restore body padding
+    document.body.style.paddingBottom = this.originalBodyPadding || '';
     
     // Remove status box
     this.removeStatusBox();
@@ -694,24 +702,26 @@ if (typeof module !== 'undefined' && module.exports) {
     this.statusBox.className = 'feedback-widget-status-box';
     this.statusBox.style.cssText = `
       position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
       width: 100%;
-      max-width: 600px;
+      height: 16vh;
       background: white;
       border: 2px solid #007bff;
-      border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
-      padding: 12px 16px;
+      border-radius: 8px 8px 0 0;
+      box-shadow: 0 -4px 12px rgba(0, 123, 255, 0.3);
+      padding: 12px 20px 16px 20px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 14px;
+      font-size: 13px;
+      line-height: 1.3;
       z-index: 999999;
       pointer-events: none;
       opacity: 0.95;
       box-sizing: border-box;
-      transition: all 0.3s ease;
+      overflow-y: auto;
     `;
     
-    // Set initial position
-    this.positionStatusBox({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
     this.statusBox.innerHTML = `
       <div style="font-weight: 600; color: #007bff; margin-bottom: 4px;">
         🎯 Element Selection Mode - Hover over elements to preview
@@ -775,15 +785,16 @@ if (typeof module !== 'undefined' && module.exports) {
           contextParts.push(`<span style="color: #6c757d; font-style: italic;">In: ${this.escapeHtml(context.parentContext)}</span>`);
         }
         
-        // Add DOM path for element location
+        // Add DOM path for element location (truncated)
         if (context.domPath) {
-          contextParts.push(`<span style="color: #28a745; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(context.domPath)}</span>`);
+          const truncatedPath = this.truncateDomPath(context.domPath, 70);
+          contextParts.push(`<span style="color: #28a745; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(truncatedPath)}</span>`);
         }
         
         if (contextParts.length > 0) {
           contextHtml = `
-            <div style="margin-bottom: 6px; padding: 4px; background: #f8f9fa; border-radius: 3px; font-size: 11px; line-height: 1.4;">
-              <div style="color: #666; margin-bottom: 2px;"><strong>Context:</strong></div>
+            <div style="margin-bottom: 4px; padding: 3px 6px; background: #f8f9fa; border-radius: 3px; font-size: 11px; line-height: 1.3;">
+              <div style="color: #666; margin-bottom: 1px; font-weight: 600;">Context:</div>
               <div style="font-family: monospace;">
                 ${contextParts.join('<br>')}
               </div>
@@ -794,7 +805,7 @@ if (typeof module !== 'undefined' && module.exports) {
       
       statusContent.innerHTML = `
         ${contextHtml}
-        <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
+        <div style="margin-top: 2px;"><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(this.truncateText(elementInfo.text, 120)) + '"' : '(no text content)'}</div>
       `;
     }
     
@@ -811,98 +822,8 @@ if (typeof module !== 'undefined' && module.exports) {
   },
 
   positionStatusBox(mousePos) {
-    if (!this.statusBox) return;
-    
-    const boxRect = this.statusBox.getBoundingClientRect();
-    const boxWidth = Math.min(600, window.innerWidth - 40); // Account for margins
-    const boxHeight = boxRect.height || 120; // Estimate if not rendered yet
-    
-    const margin = 20;
-    const cursorBuffer = 100; // Keep box at least 100px away from cursor
-    
-    // Calculate available areas
-    const areas = [
-      // Bottom center (preferred)
-      {
-        x: Math.max(margin, Math.min(window.innerWidth - boxWidth - margin, (window.innerWidth - boxWidth) / 2)),
-        y: window.innerHeight - boxHeight - margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          (window.innerWidth - boxWidth) / 2, 
-          window.innerHeight - boxHeight - margin, 
-          boxWidth, boxHeight),
-        position: 'bottom'
-      },
-      // Top center
-      {
-        x: Math.max(margin, Math.min(window.innerWidth - boxWidth - margin, (window.innerWidth - boxWidth) / 2)),
-        y: margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          (window.innerWidth - boxWidth) / 2, 
-          margin, 
-          boxWidth, boxHeight),
-        position: 'top'
-      },
-      // Bottom left
-      {
-        x: margin,
-        y: window.innerHeight - boxHeight - margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          margin, 
-          window.innerHeight - boxHeight - margin, 
-          boxWidth, boxHeight),
-        position: 'bottom-left'
-      },
-      // Bottom right
-      {
-        x: window.innerWidth - boxWidth - margin,
-        y: window.innerHeight - boxHeight - margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          window.innerWidth - boxWidth - margin, 
-          window.innerHeight - boxHeight - margin, 
-          boxWidth, boxHeight),
-        position: 'bottom-right'
-      },
-      // Top left
-      {
-        x: margin,
-        y: margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          margin, 
-          margin, 
-          boxWidth, boxHeight),
-        position: 'top-left'
-      },
-      // Top right
-      {
-        x: window.innerWidth - boxWidth - margin,
-        y: margin,
-        priority: this.getDistanceFromCursor(mousePos, 
-          window.innerWidth - boxWidth - margin, 
-          margin, 
-          boxWidth, boxHeight),
-        position: 'top-right'
-      }
-    ];
-    
-    // Sort by distance from cursor (furthest first) and prefer bottom positions
-    areas.sort((a, b) => {
-      // Prefer bottom positions when distances are similar
-      if (Math.abs(a.priority - b.priority) < cursorBuffer) {
-        if (a.position.includes('bottom') && !b.position.includes('bottom')) return -1;
-        if (!a.position.includes('bottom') && b.position.includes('bottom')) return 1;
-      }
-      return b.priority - a.priority;
-    });
-    
-    // Use the best position that keeps the box far enough from cursor
-    const bestPosition = areas.find(area => area.priority >= cursorBuffer) || areas[0];
-    
-    // Apply the position
-    this.statusBox.style.left = `${bestPosition.x}px`;
-    this.statusBox.style.top = `${bestPosition.y}px`;
-    this.statusBox.style.right = 'auto';
-    this.statusBox.style.bottom = 'auto';
-    this.statusBox.style.width = `${boxWidth}px`;
+    // Status box is now fixed to bottom of screen - no positioning needed
+    return;
   },
 
   getDistanceFromCursor(mousePos, boxX, boxY, boxWidth, boxHeight) {
@@ -928,6 +849,29 @@ if (typeof module !== 'undefined' && module.exports) {
     return div.innerHTML;
   },
 
+  truncateText(text, maxLength = 100) {
+    if (!text || text.length <= maxLength) return text;
+    return text.substring(0, maxLength) + '...';
+  },
+
+  truncateDomPath(domPath, maxLength = 80) {
+    if (!domPath || domPath.length <= maxLength) return domPath;
+    // Try to keep the most specific part (end) of the path
+    const parts = domPath.split(' > ');
+    if (parts.length > 1) {
+      let result = parts[parts.length - 1]; // Start with the most specific
+      for (let i = parts.length - 2; i >= 0; i--) {
+        const candidate = parts[i] + ' > ' + result;
+        if (candidate.length > maxLength) {
+          return '...' + result;
+        }
+        result = candidate;
+      }
+      return result;
+    }
+    return domPath.substring(0, maxLength) + '...';
+  },
+
   handleMouseOver: function(e) {
     if (!ElementSelector.isActive) return;
     
@@ -950,14 +894,7 @@ if (typeof module !== 'undefined' && module.exports) {
     
     ElementSelector.lastMousePosition = { x: e.clientX, y: e.clientY };
     
-    // Throttle position updates to avoid excessive calculations
-    if (ElementSelector.positionUpdateTimeout) {
-      clearTimeout(ElementSelector.positionUpdateTimeout);
-    }
-    
-    ElementSelector.positionUpdateTimeout = setTimeout(() => {
-      ElementSelector.positionStatusBox(ElementSelector.lastMousePosition);
-    }, 50); // Update every 50ms when moving
+    // Status box is now fixed - no positioning updates needed
   }.bind(this),
 
   handleClick: function(e) {
@@ -1046,15 +983,16 @@ if (typeof module !== 'undefined' && module.exports) {
           contextParts.push(`<span style="color: #6c757d; font-style: italic;">In: ${this.escapeHtml(context.parentContext)}</span>`);
         }
         
-        // Add DOM path for element location
+        // Add DOM path for element location (truncated)
         if (context.domPath) {
-          contextParts.push(`<span style="color: #155724; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(context.domPath)}</span>`);
+          const truncatedPath = this.truncateDomPath(context.domPath, 70);
+          contextParts.push(`<span style="color: #155724; font-size: 10px; font-family: monospace;">Path: ${this.escapeHtml(truncatedPath)}</span>`);
         }
         
         if (contextParts.length > 0) {
           contextHtml = `
-            <div style="margin-bottom: 6px; padding: 4px; background: #d4edda; border-radius: 3px; font-size: 11px; line-height: 1.4;">
-              <div style="color: #155724; margin-bottom: 2px;"><strong>Selected Context:</strong></div>
+            <div style="margin-bottom: 4px; padding: 3px 6px; background: #d4edda; border-radius: 3px; font-size: 11px; line-height: 1.3;">
+              <div style="color: #155724; margin-bottom: 1px; font-weight: 600;">Selected Context:</div>
               <div style="font-family: monospace;">
                 ${contextParts.join('<br>')}
               </div>
@@ -1064,9 +1002,9 @@ if (typeof module !== 'undefined' && module.exports) {
       }
       
       statusContent.innerHTML = `
-        <div style="color: #28a745; font-weight: 600; margin-bottom: 4px;">✅ Element Selected!</div>
+        <div style="color: #28a745; font-weight: 600; margin-bottom: 2px;">✅ Element Selected!</div>
         ${contextHtml}
-        <div><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(elementInfo.text) + '"' : '(no text content)'}</div>
+        <div style="margin-top: 2px;"><strong>Content:</strong> ${elementInfo.text ? '"' + this.escapeHtml(this.truncateText(elementInfo.text, 120)) + '"' : '(no text content)'}</div>
       `;
     }
     
@@ -1551,6 +1489,7 @@ if (typeof module !== 'undefined' && module.exports) {
   container: null,
   modal: null,
   sessionGapModal: null,
+  feedbackPopup: null,
   floatingButton: null,
   adminPanel: null,
   floatingMenu: null,
@@ -1703,6 +1642,10 @@ if (typeof module !== 'undefined' && module.exports) {
         <span class="feedback-menu-badge" style="${unexportedCount > 0 ? 'background: #dc3545;' : (count > 0 ? 'background: #28a745;' : '')}">${count}</span>
       </div>
       ${count > 0 ? `
+      <div class="feedback-menu-item" data-action="view">
+        <span class="feedback-menu-icon">👁️</span>
+        <span class="feedback-menu-text">View Feedback</span>
+      </div>
       <div class="feedback-menu-item" data-action="export">
         <span class="feedback-menu-icon">📥</span>
         <span class="feedback-menu-text">Export Feedback</span>
@@ -1735,6 +1678,9 @@ if (typeof module !== 'undefined' && module.exports) {
         break;
       case 'admin':
         this.showAdminPanel();
+        break;
+      case 'view':
+        this.showFeedbackPopup();
         break;
       case 'export':
         this.handleExport();
@@ -1924,6 +1870,145 @@ if (typeof module !== 'undefined' && module.exports) {
     if (this.sessionGapModal) {
       this.sessionGapModal.remove();
       this.sessionGapModal = null;
+    }
+  },
+
+  showFeedbackPopup() {
+    if (this.feedbackPopup) {
+      this.closeFeedbackPopup();
+    }
+
+    const items = FeedbackStorage.getFeedbackItems();
+    if (items.length === 0) {
+      this.showError('No feedback items to display');
+      return;
+    }
+
+    this.feedbackPopup = this.createFeedbackPopup(items);
+    this.container.appendChild(this.feedbackPopup);
+
+    // Focus the copy button
+    setTimeout(() => {
+      const copyBtn = this.feedbackPopup.querySelector('.feedback-popup-copy-btn');
+      if (copyBtn) copyBtn.focus();
+    }, 100);
+  },
+
+  createFeedbackPopup(items) {
+    const popup = document.createElement('div');
+    popup.className = 'feedback-widget-modal-overlay feedback-popup-overlay';
+
+    const markdown = FeedbackExport.generateMarkdown(items);
+    const previewText = this.escapeHtml(markdown);
+
+    popup.innerHTML = `
+      <div class="feedback-widget-modal feedback-popup-modal">
+        <div class="feedback-widget-header">
+          <h3>Feedback (${items.length} items)</h3>
+          <button class="feedback-widget-close-btn feedback-popup-close" type="button">&times;</button>
+        </div>
+
+        <div class="feedback-popup-content">
+          <div class="feedback-popup-actions">
+            <button type="button" class="feedback-popup-copy-btn">
+              <span class="copy-icon">📋</span>
+              Copy to Clipboard
+            </button>
+            <button type="button" class="feedback-popup-export-btn">
+              <span class="export-icon">📥</span>
+              Download File
+            </button>
+          </div>
+
+          <div class="feedback-popup-preview">
+            <pre class="feedback-popup-text">${previewText}</pre>
+          </div>
+        </div>
+      </div>
+    `;
+
+    this.bindFeedbackPopupEvents(popup, markdown);
+    return popup;
+  },
+
+  bindFeedbackPopupEvents(popup, markdown) {
+    const closeBtn = popup.querySelector('.feedback-popup-close');
+    const copyBtn = popup.querySelector('.feedback-popup-copy-btn');
+    const exportBtn = popup.querySelector('.feedback-popup-export-btn');
+
+    // Close popup events
+    closeBtn.addEventListener('click', () => this.closeFeedbackPopup());
+    popup.addEventListener('click', (e) => {
+      if (e.target === popup) this.closeFeedbackPopup();
+    });
+
+    // Copy to clipboard
+    copyBtn.addEventListener('click', () => {
+      this.copyToClipboard(markdown, copyBtn);
+    });
+
+    // Export file
+    exportBtn.addEventListener('click', () => {
+      this.handleExport();
+      this.closeFeedbackPopup();
+    });
+
+    // Escape key to close
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        this.closeFeedbackPopup();
+        document.removeEventListener('keydown', handleKeyDown);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+  },
+
+  async copyToClipboard(text, button) {
+    try {
+      // Try modern clipboard API first
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        this.showCopySuccess(button);
+        return;
+      }
+
+      // Fallback to older method
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+
+      this.showCopySuccess(button);
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      this.showError('Failed to copy to clipboard. Please try manual selection.');
+    }
+  },
+
+  showCopySuccess(button) {
+    const originalText = button.innerHTML;
+    button.innerHTML = '<span class="copy-icon">✅</span> Copied!';
+    button.style.background = '#28a745';
+
+    setTimeout(() => {
+      button.innerHTML = originalText;
+      button.style.background = '';
+    }, 2000);
+
+    this.showSuccess('Feedback copied to clipboard!');
+  },
+
+  closeFeedbackPopup() {
+    if (this.feedbackPopup) {
+      this.feedbackPopup.remove();
+      this.feedbackPopup = null;
     }
   },
 
@@ -2186,6 +2271,7 @@ if (typeof module !== 'undefined' && module.exports) {
       </div>
       
       <div class="feedback-widget-admin-actions">
+        <button class="feedback-widget-view-btn" ${items.length === 0 ? 'disabled' : ''}>View All</button>
         <button class="feedback-widget-export-btn" ${items.length === 0 ? 'disabled' : ''}>
           Export All ${unexportedCount > 0 ? `(${unexportedCount} new)` : ''}
         </button>
@@ -2244,11 +2330,13 @@ if (typeof module !== 'undefined' && module.exports) {
 
   bindAdminEvents(panel) {
     const closeBtn = panel.querySelector('.feedback-widget-admin-close-btn');
+    const viewBtn = panel.querySelector('.feedback-widget-view-btn');
     const exportBtn = panel.querySelector('.feedback-widget-export-btn');
     const clearBtn = panel.querySelector('.feedback-widget-clear-btn');
     const deleteButtons = panel.querySelectorAll('.feedback-widget-delete-item-btn');
-    
+
     closeBtn.addEventListener('click', () => this.closeAdminPanel());
+    viewBtn.addEventListener('click', () => this.showFeedbackPopup());
     exportBtn.addEventListener('click', () => this.handleExport());
     clearBtn.addEventListener('click', () => this.handleClearAll());
     
@@ -2461,6 +2549,8 @@ if (typeof module !== 'undefined' && module.exports) {
         align-items: center;
         justify-content: center;
         padding: 20px;
+        overflow: hidden;
+        overscroll-behavior: contain;
       }
       
       .feedback-widget-modal {
@@ -2664,12 +2754,18 @@ if (typeof module !== 'undefined' && module.exports) {
         cursor: not-allowed;
       }
       
+      .feedback-widget-view-btn {
+        background: #6c757d !important;
+        color: white !important;
+        border-color: #6c757d !important;
+      }
+
       .feedback-widget-export-btn {
         background: #007bff !important;
         color: white !important;
         border-color: #007bff !important;
       }
-      
+
       .feedback-widget-clear-btn {
         background: #dc3545 !important;
         color: white !important;
@@ -2959,6 +3055,161 @@ if (typeof module !== 'undefined' && module.exports) {
           font-size: 15px;
         }
       }
+      
+      /* Feedback Popup Styles */
+      .feedback-popup-modal {
+        max-width: 700px;
+        max-height: 80vh;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .feedback-popup-content {
+        padding: 0;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .feedback-popup-actions {
+        padding: 20px 20px 16px;
+        border-bottom: 1px solid #eee;
+        display: flex;
+        gap: 12px;
+        flex-shrink: 0;
+      }
+
+      .feedback-popup-copy-btn,
+      .feedback-popup-export-btn {
+        padding: 10px 16px;
+        border: 1px solid #ddd;
+        background: white;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition: all 0.2s ease;
+      }
+
+      .feedback-popup-copy-btn:hover,
+      .feedback-popup-export-btn:hover {
+        background: #f8f9fa;
+        border-color: #007bff;
+      }
+
+      .feedback-popup-copy-btn {
+        background: #007bff;
+        color: white;
+        border-color: #007bff;
+      }
+
+      .feedback-popup-copy-btn:hover {
+        background: #0056b3;
+        color: white;
+      }
+
+      .feedback-popup-export-btn .export-icon,
+      .feedback-popup-copy-btn .copy-icon {
+        font-size: 16px;
+      }
+
+      .feedback-popup-preview {
+        flex: 1;
+        overflow: hidden;
+        padding: 0 20px 20px;
+      }
+
+      .feedback-popup-text {
+        width: 100%;
+        height: 100%;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 16px;
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        background: #f8f9fa;
+        color: #333;
+        overflow: auto;
+        overscroll-behavior: contain;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        margin: 0;
+        box-sizing: border-box;
+        resize: none;
+        max-height: 400px;
+        min-height: 200px;
+      }
+
+      .feedback-popup-text:focus {
+        outline: 2px solid #007bff;
+        outline-offset: -1px;
+      }
+
+      /* Mobile responsiveness for popup */
+      @media (max-width: 768px) {
+        .feedback-popup-modal {
+          max-width: calc(100vw - 20px);
+          margin: 10px;
+          max-height: 85vh;
+        }
+
+        .feedback-popup-actions {
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .feedback-popup-copy-btn,
+        .feedback-popup-export-btn {
+          justify-content: center;
+        }
+
+        .feedback-popup-text {
+          font-size: 12px;
+        }
+      }
+
+      /* Element Selector Status Box - Fixed to bottom of screen */
+      .feedback-widget-status-box {
+        /* Fixed positioning at bottom of viewport */
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        
+        /* Larger size for better content display (16vh = ~1/6th of screen) */
+        width: 100% !important;
+        height: 16vh !important;
+        
+        /* Visual styling */
+        background: white !important;
+        border: 2px solid #007bff !important;
+        border-radius: 8px 8px 0 0 !important; /* Only top corners rounded */
+        box-shadow: 0 -4px 12px rgba(0, 123, 255, 0.3) !important; /* Shadow points upward */
+        
+        /* Content styling - Optimized for 6 lines within 12.5vh */
+        padding: 12px 20px 16px 20px !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+        font-size: 13px !important;
+        line-height: 1.3 !important; /* Compact line spacing for more content */
+        
+        /* Layer and interaction */
+        z-index: 999999 !important; /* Above all other elements */
+        pointer-events: none !important; /* Don't interfere with element selection */
+        opacity: 0.95 !important;
+        box-sizing: border-box !important;
+        
+        /* Scrolling for overflow content */
+        overflow-y: auto !important;
+        
+        /* No transitions to prevent movement when cursor intersects */
+        transition: none !important;
+      }
     `;
     
     document.head.appendChild(style);
@@ -2978,6 +3229,7 @@ if (typeof module !== 'undefined' && module.exports) {
     ElementSelector.deactivate();
     this.closeFloatingMenu();
     this.closeSessionGapModal();
+    this.closeFeedbackPopup();
     this.isInitialized = false;
     this.isAdminPanelOpen = false;
     this.isContextMenuOpen = false;
