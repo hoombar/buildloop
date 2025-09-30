@@ -1062,6 +1062,8 @@ const FeedbackUI = {
         align-items: center;
         justify-content: center;
         padding: 20px;
+        overflow: hidden;
+        overscroll-behavior: contain;
       }
       
       .feedback-widget-modal {
@@ -1647,11 +1649,14 @@ const FeedbackUI = {
         background: #f8f9fa;
         color: #333;
         overflow: auto;
+        overscroll-behavior: contain;
         white-space: pre-wrap;
         word-wrap: break-word;
         margin: 0;
         box-sizing: border-box;
         resize: none;
+        max-height: 400px;
+        min-height: 200px;
       }
 
       .feedback-popup-text:focus {
